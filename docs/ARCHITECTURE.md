@@ -1,0 +1,135 @@
+# Tender document processing — hybrid architecture
+
+Goal: fetch the right requirements from real MahaTender / PMC tender bundles, fast, with a page
+citation for every requirement, without sending everything to a paid OCR service.
+
+## Pipeline
+
+```
+upload (zip / rar / pdf / xls, several at once)
+   │
+   ▼
+0. UNPACK            bundle.expand ─ recursive zip/rar (bsdtar), zip-slip guard, skips __MACOSX/dotfiles,
+   │                 keeps an origin trail: "work_2291063.zip › Tenderdocuments.rar › DATASHEET.pdf"
+   ▼
+1. LOCAL TIER (seconds, free, parallel per document)
+   ├─ quick scan      pdfium, every page (~2 ms/page): text + readability class + "is this a scan?"
+   ├─ classify doc    notice / conditions / datasheet / rfp / boq / specifications / approval
+   ├─ structure       pdfplumber tables + headings + sentences, ONLY readable pages of
+   │                  eligibility-bearing documents (specs, SOPs, QAPs, BOQs are skipped)
+   └─ BOQ .xls        xlrd: estimated amount, contract no., Percentage / Item-rate
+   │
+   ▼
+2. EXTRACT            facts → PMC standard criteria → sentence rules → checklists → award
+   │                  ► persisted immediately; the UI shows usable criteria within seconds
+   ▼
+3. OCR TIER (background, only what the local tier could not read)
+   ├─ router          pages classed image / garbled / lossy-Marathi, in eligibility documents,
+   │                  priority datasheet > notice > conditions > rfp > other, capped per tender
+   ├─ cache           (file sha256, page, mode) on disk — a shared general-conditions PDF is OCR'd once
+   ├─ Datalab /convert  batches of ≤10 pages (page_range), 4 requests in flight, rate-limited,
+   │                  429/limit back-off, polling with back-off, per-job failure isolation
+   └─ merge           Chandra markdown → the same page/sentence/table structures as local pages
+   │
+   ▼
+4. EXTRACT AGAIN      derived criteria become located and quoted; facts gain sources
+```
+
+Nothing waits on OCR. If OCR is not configured, fails, or times out, the local result stays and
+the unread pages are listed; criteria that should exist but were not found are shown as
+**derived — confirm**, never silently dropped.
+
+## Page readability classes
+
+Real bundles contain pages where "has a text layer" is not the same as "readable":
+
+| class | what it is (seen in the corpus) | local tier | OCR route |
+|---|---|---|---|
+| `english` | genuine English text layer | full parse, quotable | — |
+| `marathi` | Unicode Devanagari; pdfminer/pdfium drop conjuncts and split words | cite by Devanagari-digit signatures (४०%, ७५), never quote | `fast` (vector) / `balanced` (scan) |
+| `garbled` | text exists but is nonsense: bad OCR layer on a scan (TERMS.pdf) or Marathi in a legacy ASCII font (`Q|Sa Jmofdmam` = टेंडर गोषवारा) | ignored | `fast` (vector) / `balanced` (scan) |
+| `image` | no text layer at all | ignored | `balanced` |
+| `blank` | scanned backside / separator sheet: < 0.3 % ink (letterhead show-through, punch holes) | ignored | **never** — Chandra invented text on one ("पुस्तक का विवरण" × 10) |
+| `ocr_en` / `ocr_mr` | after OCR | full parse, quotable (Marathi quoted as Marathi) | — |
+
+## OCR mode choice (measured on the corpus, Sep 2026)
+
+| mode | printed / legacy font | phone scans, handwriting | cost / page | latency per request |
+|---|---|---|---|---|
+| `fast` | exact | numbers exact, words misread ("mainline" for "manhole", मंगील for मागील) | ~0.4¢ | 13–25 s |
+| `balanced` (Chandra) | exact | exact, marks `<del>` struck and `<i>` handwritten text | ~0.4¢ batched (2¢ single page) | 10–50 s |
+| `accurate` (Chandra) | exact | identical to balanced | ~1¢ | ~26 s |
+
+Routing: **vector page with a broken or lossy text layer → `fast`; scanned page → `balanced`**.
+`accurate` bought nothing on this corpus. Latency is per request, not per page (10 pages ≈ 25 s),
+hence batching. Both are configurable (`TE_OCR_MODE_SCANNED`, `TE_OCR_MODE_VECTOR`).
+
+Chandra does OCR only — it does **not translate**. Marathi stays Marathi: rules match Marathi
+clauses directly and the English criterion label comes from the PMC standard. A translation layer
+(for arbitrary Marathi clauses) would need an LLM and is not part of this build.
+
+## Reconciliation rules (why the extraction can be trusted)
+
+* **Facts come from every structured section** that states them (Tender Notice box, Work Input
+  Form, B-1 row, conditions tender table, Tender Abstract total, Marathi Goshwara, BOQ .xls) and are
+  marked consistent / single source / conflict.
+* **Typed text and spreadsheets outrank OCR** (which includes handwriting); OCR outliers are reported.
+* **PMC security deposit**: a 4 % figure and a 5 % figure are consistent (1 % EMD is converted).
+* **The tender's own stated threshold governs; the formula is a cross-check.** The engine explains
+  mismatches: the "Rs.423647 Lakhs" template unit error, blanks left unfilled, and tenders that compute
+  on the GST-inclusive cost instead of the cost put to tender.
+* **A corrigendum supersedes.** A short document titled Corrigendum / Addendum / शुद्धिपत्रक is its own
+  role; its revised values ("Existing | Revised" tables, "… revised to Rs. …") win, and the fact shows
+  "Changed by corrigendum" with the original value noted — never a conflict.
+
+## Edge cases handled
+
+| where | case | handling |
+|---|---|---|
+| upload | password-protected, truncated, zero-page PDF | clear per-document error; the rest of the bundle still runs |
+| upload | zip bombs, encrypted members, RAR, images, Word/Excel exports, duplicates, `..` paths | see `bundle.py` (refused / converted / read once / warned) |
+| pages | blank scans | detected locally (ink ratio), never sent to OCR |
+| OCR | repetitive (hallucinated) output | rejected before it reaches extraction |
+| OCR | empty cache entries from older runs | treated as a miss, retried |
+| OCR | not configured, failed, or over the page cap | the pages left unread are listed by number in the warnings |
+| text | numbered list items run together in one sentence ("…below- 1 GST … 2 PF code … 3 …") | each item is its own paragraph and inherits its intro's obligation |
+| text | words run together by the text layer ("EARNESTMONEYDEPOSIT", "calendarmonths") | whitespace-tolerant patterns for the key facts |
+| tables | a row split across a page break | continuation joined to the previous item |
+| checklists | data sheets, fill-in financial formats, boxed clauses, tables of contents, chapter headings, clause mentions of "qualification criteria" | not treated as requirement lists |
+| checklists | summary tables and submission lists restating a criterion ("Staff", "Documental proof of GSTN") | folded into that criterion as evidence |
+| criteria | key-quantity grid printed blank | item names listed; 30 % of each BOQ quantity applies; window (3 or 5 years) read from the clause |
+
+## Accuracy harness
+
+`tests/data/corpus_truth.json` holds values verified by reading the pages (243 checks: facts,
+thresholds, similar-work options, key quantities, personnel, required and forbidden labels).
+`scripts/score_corpus.py` scores a `corpus_report.py --json` run against it, and
+`tests/test_corpus_golden.py::test_accuracy_against_ground_truth_with_cached_ocr` replays the OCR
+cache offline and fails on any miss. Current: **243 / 243**.
+
+## Throughput on the corpus (13 tenders + 1 RFP, ~1,100 pages)
+
+| | first run | re-run (cache) |
+|---|---|---|
+| local tier per bundle | 0.1–7.5 s | same |
+| OCR per bundle | 14–105 s (3–62 pages) | ~0.1 s |
+| criteria located & quoted | local only: 74 / 120 (+17 cited in Marathi, 29 derived) | hybrid: **188 / 188** (139 criteria + 49 documents) |
+
+## Code map
+
+| stage | module |
+|---|---|
+| unpack, document roles | `app/services/bundle.py` |
+| quick scan, structural parse | `app/adapters/pdf_parser.py` (`quick_scan`, `parse_pdf`) |
+| readability | `app/adapters/readability.py` |
+| BOQ spreadsheet | `app/adapters/boq_xls.py` |
+| OCR adapter | `app/adapters/datalab_ocr.py` |
+| OCR markdown → pages | `app/adapters/ocr_text.py` |
+| router, orchestration | `app/services/tender_processing.py` |
+| facts + reconciliation | `app/services/pmc_facts.py` |
+| PMC standard criteria | `app/services/pmc_eligibility.py` |
+| checklists | `app/services/checklist_extraction.py` |
+| bundle extraction | `app/services/bundle_extraction.py` |
+| API job (persist local, then OCR) | `app/services/pipeline.py` (`process_tender`) |
+| corpus runner | `scripts/corpus_report.py` |
+| accuracy scorer | `scripts/score_corpus.py` + `tests/data/corpus_truth.json` |

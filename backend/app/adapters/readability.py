@@ -1,0 +1,72 @@
+"""Page readability classification.
+
+Real PMC tender bundles contain four kinds of page (observed across the MahaTender corpus):
+
+  english  - a genuine English text layer; rules can read it
+  marathi  - a Unicode Devanagari text layer. pdfplumber extracts it lossily (conjuncts and
+             matras are dropped or reordered), so it is good for locating a clause (Devanagari
+             digits such as ४०% survive) but never for quoting it
+  garbled  - a text layer that exists but is nonsense: a bad OCR layer on a scan, or Marathi
+             typed in a legacy ASCII-mapped font ("Q|Sa Jmofdmam" = "टेंडर गोषवारा")
+  image    - no text layer at all (scanned / flattened)
+
+A "has text" check is not enough: garbled pages pass it and would silently yield no
+requirements. Anything not `english` is reported as not machine-readable so the committee
+knows what the system could not read.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+COMMON_WORDS = frozenset("""
+the of and to in a is be for shall on by with as or any this that are will from at not an all
+work works tender contractor bidder cost pmc per rs date period no which under such other its
+have has been may should must it if than time amount estimated deposit security earnest money
+name corporation pune municipal department engineer details form item quantity rate total cubic
+metre providing laying complete bid bids submitted submit documents certificate years year last
+""".split())
+
+_WEIRD = re.compile(r"[{}|~`$_^\\<>]")
+_CID = re.compile(r"\(cid:\d+\)")
+_ODD_TOKEN = re.compile(r"[A-Za-z][^A-Za-z\s.,:;()'\-/0-9%&][A-Za-z]")
+_DEV = re.compile(r"[ऀ-ॿ]")
+_LAT = re.compile(r"[A-Za-z]")
+
+ENGLISH_KINDS = {"english", "ocr_en"}  # English rules can run on these
+QUOTABLE_KINDS = {"english", "ocr_en", "ocr_mr"}  # text we are willing to show as a verbatim quote
+NEEDS_OCR = {"image", "garbled", "marathi"}  # local text is missing, junk, or lossy Devanagari
+
+
+@dataclass(frozen=True)
+class PageQuality:
+    kind: str  # english | marathi | garbled | image | blank | ocr_en | ocr_mr
+    common_ratio: float = 0.0
+    weird_ratio: float = 0.0
+    odd_ratio: float = 0.0
+
+    @property
+    def machine_readable(self) -> bool:
+        return self.kind in ENGLISH_KINDS
+
+    @property
+    def quotable(self) -> bool:
+        return self.kind in QUOTABLE_KINDS
+
+
+def classify_page(text: str) -> PageQuality:
+    t = (text or "").strip()
+    if len(t) < 40:
+        return PageQuality("image")
+    tokens = t.split()
+    dev, lat = len(_DEV.findall(t)), len(_LAT.findall(t))
+    words = [w.lower().strip(".,:;()[]'\"") for w in tokens]
+    common = sum(1 for w in words if w in COMMON_WORDS) / max(1, len(words))
+    weird = (len(_WEIRD.findall(t)) + 3 * len(_CID.findall(t))) / max(1, len(t))
+    odd = sum(1 for w in tokens if _ODD_TOKEN.search(w)) / max(1, len(tokens))
+    if dev > 80 and dev > 0.6 * lat:
+        return PageQuality("marathi", common, weird, odd)
+    if lat > 50 and common >= 0.08 and weird < 0.02 and odd < 0.12:
+        return PageQuality("english", common, weird, odd)
+    return PageQuality("garbled", common, weird, odd)

@@ -1,0 +1,24 @@
+[project]
+name = "tender-evaluator-poc"
+version = "0.1.0"
+description = "Tender Evaluator (PMC-side) PoC backend: page-anchored extraction, deterministic verdicts, dual citation"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0",
+    "pdfplumber>=0.11",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+    "xlrd>=2.0.2",
+    "openpyxl>=3.1.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "reportlab>=4.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
