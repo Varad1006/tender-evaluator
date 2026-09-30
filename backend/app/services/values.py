@@ -14,11 +14,26 @@ MULTIPLIERS = {"crore": 10_000_000, "crores": 10_000_000, "cr": 10_000_000,
                "lakh": 100_000, "lakhs": 100_000, "lac": 100_000, "lacs": 100_000,
                "million": 1_000_000}
 
+# Bidder submissions are scans, and their text layers break Indian digit grouping in two ways.
+#
+#   "Rs. 1,87 ,87 ,157/-"   a group separated by stray spaces. The spaces carry no information,
+#                           so they are removed. Matching only "1,87" here returned ₹187 for a
+#                           ₹1.87 crore turnover — a hundred-thousand-fold error, in the direction
+#                           that disqualifies a bidder (Vimal Enterprises' CA certificate, p.7).
+#   "Rs. 7O,62,407/-"       a letter standing in for a digit. This is NOT repaired: "O" is a 0
+#                           here and a 6 elsewhere, and inventing the digit would put a number the
+#                           document never states under a page citation. The amount is refused,
+#                           which costs a lookup; guessing it costs a wrong verdict.
+_GROUPED = r"\d[\d,]*(?:\s*,\s*\d[\d,]*)*(?:\s*\.\d+)?"
+
 _CURRENCY = re.compile(
-    r"(?:(?:rs\.?|inr|₹)\s*(?P<a>\d[\d,]*(?:\.\d+)?)(?:\s*/-)?\s*(?P<am>crores?|cr\b\.?|lakhs?|lacs?|million)?"
-    r"|(?P<b>\d[\d,]*(?:\.\d+)?)\s*(?P<bm>crores?|lakhs?|lacs?)\b)",
+    r"(?:(?:rs\.?|inr|₹)\s*(?P<a>" + _GROUPED + r")(?:\s*/-)?\s*(?P<am>crores?|cr\b\.?|lakhs?|lacs?|million)?"
+    r"|(?P<b>" + _GROUPED + r")\s*(?P<bm>crores?|lakhs?|lacs?)\b)",
     re.IGNORECASE,
 )
+
+# A digit-shaped letter that continues the number the match just stopped on: the value is cut short.
+_TRUNCATED_BY_LETTER = re.compile(r"^\s*[,.]?\s*[OoIlSsZzBbGgq]\s*[\d,]")
 
 _DURATION = re.compile(
     r"\(?\b(?P<n>\d+|" + "|".join(NUMBER_WORDS) + r")\)?\s*(?:-\s*)?(?P<unit>years?|yrs?|days?|months?)\b",
@@ -26,6 +41,11 @@ _DURATION = re.compile(
 )
 
 _YEAR = re.compile(r"\b(20[0-4]\d|19[89]\d)\b")
+
+# "2020-2021", "2020-21", "FY 2024-25", "F.Y.2019-20". The two halves must be consecutive years,
+# which is what separates a financial year from a range, a clause number or an OCR mangling
+# ("2O2O-27" and "2027-22" both appear in one bidder's turnover certificate and are not years).
+_FY = re.compile(r"\b(?:F\.?\s?Y\.?\s*)?(?P<y1>(?:19|20)\d{2})\s*[-–—/]\s*(?P<y2>(?:19|20)\d{2}|\d{2})\b")
 
 GSTIN = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b")
 
@@ -43,19 +63,62 @@ class Duration:
     raw: str
 
 
-def parse_amounts(text: str) -> list[Amount]:
-    out = []
+def _scan_amounts(text: str) -> tuple[list[Amount], list[str]]:
+    """(amounts read, fragments refused as corrupt)."""
+    out: list[Amount] = []
+    refused: list[str] = []
     for m in _CURRENCY.finditer(text):
         digits = m.group("a") or m.group("b")
+        group = "a" if m.group("a") else "b"
         mult_word = (m.group("am") or m.group("bm") or "").lower().rstrip(".")
+        if _TRUNCATED_BY_LETTER.match(text[m.end(group): m.end(group) + 4]):
+            refused.append(text[m.start(): m.end(group) + 8].strip())
+            continue
         # A bare "2,000 days" style number without a currency marker or multiplier is not money.
         try:
-            number = float(digits.replace(",", ""))
+            number = float(re.sub(r"[\s,]", "", digits))
         except ValueError:
             continue
         multiplier = MULTIPLIERS.get(mult_word, 1)
         out.append(Amount(value=number * multiplier, raw=m.group(0).strip()))
+    return out, refused
+
+
+def parse_amounts(text: str) -> list[Amount]:
+    return _scan_amounts(text)[0]
+
+
+# A comma-grouped token whose groups are not all numeric: "L,26,40 ,423" for 1,26,40,423, and
+# "2, L7 ,12,07 4" for 2,17,12,074. Commas are what make this safe to look for — a PAN, a UDIN and
+# a firm registration number all mix letters and digits, and none of them is comma-grouped. Three
+# groups are required rather than two: "Flat No. 402, D Wing" and "September 17, 2025" have one
+# comma each, and at lakh scale and above an Indian amount always has at least two.
+_GROUPED_TOKEN = re.compile(r"(?<![\w,])([0-9A-Za-z]{1,3}(?:\s*,\s*[0-9A-Za-z]{1,4}){2,5})(?!\w)")
+_HAS_DIGIT = re.compile(r"\d")
+_HAS_ALPHA = re.compile(r"[A-Za-z]")
+
+
+def mangled_numbers(text: str) -> list[str]:
+    """Grouped numbers with a letter standing where a digit belongs.
+
+    These never reach `parse_amounts` at all — a figure that begins with the letter matches no
+    currency pattern — so a page can look clean while its largest numbers are missing entirely.
+    """
+    out = []
+    for m in _GROUPED_TOKEN.finditer(text):
+        token = m.group(1)
+        if _HAS_DIGIT.search(token) and _HAS_ALPHA.search(token):
+            out.append(token.strip())
     return out
+
+
+def corrupt_amounts(text: str) -> list[str]:
+    """Fragments that state money the text layer has mangled beyond safe reading.
+
+    Surfaced so the page can be sent to OCR and the committee told what was not read, instead of a
+    truncated figure being shown as if it were the bidder's.
+    """
+    return _scan_amounts(text)[1] + mangled_numbers(text)
 
 
 def parse_durations(text: str, unit: str | None = None) -> list[Duration]:
@@ -73,6 +136,29 @@ def parse_durations(text: str, unit: str | None = None) -> list[Duration]:
 
 def parse_years(text: str) -> list[int]:
     return [int(y) for y in _YEAR.findall(text)]
+
+
+def fy_start(y1: str | int, y2: str | int) -> int | None:
+    """The year a financial year begins in, or None when the pair is not a financial year.
+
+    '2020-2021' and '2020-21' both start in 2020. '2027-22' does not start anywhere: a scan's text
+    layer turned 2021-22 into it, and reading it as a year would file a turnover under a year the
+    certificate never states.
+    """
+    start = int(y1)
+    s2 = str(y2)
+    end = int(s2) if len(s2) == 4 else int(str(start)[: 4 - len(s2)] + s2)
+    return start if end == start + 1 else None
+
+
+def parse_financial_years(text: str) -> list[int]:
+    """Every financial-year start in the text, in order, ignoring pairs that are not consecutive."""
+    out = []
+    for m in _FY.finditer(text):
+        start = fy_start(m.group("y1"), m.group("y2"))
+        if start is not None:
+            out.append(start)
+    return out
 
 
 def format_inr(value: float) -> str:

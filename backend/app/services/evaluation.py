@@ -34,6 +34,32 @@ class VerdictResult:
     extra: dict = field(default_factory=dict)
 
 
+def _incomplete(claims: list[Claim]) -> list[str]:
+    """Figures the extractor refused as unreadable on the same certificate as the ones it read."""
+    out: list[str] = []
+    for c in claims:
+        if c.detail.get("series_incomplete"):
+            out += [str(x) for x in (c.detail.get("unreadable") or [])]
+    return sorted(set(out))
+
+
+def _cannot_fail(spec: CriterionSpec, claims: list[Claim], best: float, unreadable: list[str]) -> VerdictResult:
+    """A shortfall measured over part of a series is not a shortfall.
+
+    When a certificate states five years and the text layer mangled two of them, the largest of the
+    three we could read is not the bidder's maximum — and failing them on it would disqualify a
+    company for a scanning artefact.
+    """
+    return VerdictResult(
+        spec.key, "unknown", "deterministic", unknown_kind="unparseable", evidence=claims[:3],
+        reason=f"The best figure that could be read is {_fmt(spec, best)}, below the required "
+               f"{_fmt(spec, spec.threshold_value)} — but {len(unreadable)} further figure(s) on the same "
+               f"document could not be read ({'; '.join(unreadable[:2])}). One of them may be the "
+               "qualifying year, so this is unknown rather than a failure.",
+        extra={"unreadable": unreadable},
+    )
+
+
 def _fmt(spec: CriterionSpec, value: float) -> str:
     if spec.threshold_unit == "INR":
         return format_inr(value)
@@ -50,7 +76,22 @@ def _not_found(spec: CriterionSpec, what: str | None = None) -> VerdictResult:
 
 
 def _numeric(spec: CriterionSpec, claims: list[Claim]) -> VerdictResult:
+    # Evidence the finder marked as not comparable is a figure computed on terms this tender does
+    # not use — a bid capacity worked out on another authority's formula, period or price base. It
+    # is a number, so it would compare; comparing it would be arithmetic on the wrong question.
+    blocked = [c for c in claims if c.detail.get("not_comparable")]
+    claims = [c for c in claims if not c.detail.get("not_comparable")]
     usable = [c for c in claims if c.value_numeric is not None]
+    if not usable and blocked:
+        reasons = sorted({d for c in blocked for d in (c.detail.get("defects") or [])})
+        return VerdictResult(
+            spec.key, "unknown", "deterministic", unknown_kind="not_found", evidence=blocked[:2],
+            reason="The figure submitted cannot be compared against this tender's requirement: it "
+                   + "; ".join(reasons)
+                   + ". Treated as unknown, not as a failure — the bidder may well qualify on a "
+                     "certificate drawn to this tender's terms.",
+            extra={"defects": reasons},
+        )
     if not usable:
         if claims:
             return VerdictResult(spec.key, "unknown", "deterministic", "A value was found but could not be read as a number.",
@@ -70,6 +111,9 @@ def _numeric(spec: CriterionSpec, claims: list[Claim]) -> VerdictResult:
             return VerdictResult(spec.key, "unknown", "deterministic", "Tender threshold could not be read.", usable,
                                  unknown_kind="unparseable")
         ok = best.value >= threshold
+        unreadable = _incomplete(usable)
+        if not ok and unreadable:
+            return _cannot_fail(spec, usable, best.value, unreadable)
         detail = best.explain() if best.applied else _fmt(spec, best.value)
         return VerdictResult(
             spec.key, "pass" if ok else "fail", "deterministic", evidence=[best_claim],
@@ -92,6 +136,9 @@ def _numeric(spec: CriterionSpec, claims: list[Claim]) -> VerdictResult:
         return VerdictResult(spec.key, "unknown", "deterministic", "Tender threshold could not be read.", usable,
                              unknown_kind="unparseable")
     ok = value >= threshold if spec.operator == ">=" else value <= threshold
+    unreadable = _incomplete(usable)
+    if not ok and unreadable:
+        return _cannot_fail(spec, usable, value, unreadable)
     symbol = ("≥" if ok else "<") if spec.operator == ">=" else ("≤" if ok else ">")
     computation = f"{_fmt(spec, value)} {symbol} {_fmt(spec, threshold)}"
     return VerdictResult(

@@ -482,7 +482,12 @@ def build(docs: list[DocView], facts: dict[str, Fact], authority_is_pmc: bool) -
     result.criteria.append(_draft(
         "pmc_bid_capacity", "Bid Capacity (A × N × 1.5 − B)", "Financial", "currency", ">=", "deterministic",
         f"≥ {format_inr(bc)}" if bc else "≥ estimated cost put to tender", where, unreadable, bc, "INR",
-        params={"certificate": "Chartered Accountant, specific to this tender"},
+        # The multiplier and the period travel with the criterion: a bidder's certificate is only
+        # evidence for this tender if it was worked out on this tender's formula and period, and
+        # the bidder phase cannot check that against a formula it does not have.
+        params={"certificate": "Chartered Accountant, specific to this tender",
+                "formula_multiplier": 1.5, "completion_years": years, "window_years": 5,
+                "certificate_validity_years": 1},
         derivation={"formula": "(A × N × 1.5) − B ≥ E; A = max annual works value (last 5 yrs), N = years, "
                                "B = existing commitments", **inputs, "stated": stated_bc, "outcome": outcome},
         notes=notes,

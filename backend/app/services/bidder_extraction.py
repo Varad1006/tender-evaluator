@@ -15,7 +15,23 @@ from typing import Callable
 
 from app.adapters.llm import LLMError
 from app.adapters.pdf_parser import ParsedDocument, Sentence, quote_on_page
-from app.services.values import GSTIN, format_inr, format_inr_short, parse_amounts, parse_durations, parse_years
+from app.services.year_tables import (
+    DERIVED_LABEL,
+    TURNOVER_LABEL,
+    WORK_DONE_LABEL,
+    cell_amount,
+    read_year_series,
+)
+from app.services.values import (
+    GSTIN,
+    format_inr,
+    format_inr_short,
+    parse_amounts,
+    parse_durations,
+    parse_financial_years,
+    parse_years,
+)
+from app.services.values import corrupt_amounts  # noqa: E402  (grouped with the other value helpers)
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +87,158 @@ def find_turnover(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
     for s in candidates:
         amount = parse_amounts(s.text)[0].value
         out.append(_claim(spec.key, s, format_inr(amount), amount))
+    return out
+
+
+# A chartered accountant's turnover certificate lists one figure per financial year, as a ruled
+# table ("2020-2021 | 3,43,19,907/-"), a bulleted list ("Financial Year 2019-20 Rs. 1,87,87,157/-")
+# or a numbered one ("1 | 2022-23 | 0"). Each year is its own claim, because the tender asks for the
+# maximum over five years and that maximum is decided only after the year's escalation factor is
+# applied — an older, smaller year routinely wins.
+_TURNOVER_CONTEXT = re.compile(r"turn\s?over", re.IGNORECASE)
+
+
+def find_turnover_series(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """Year-stamped turnover figures, so the verdict can index them to current price level."""
+    pages = {s.page for s in doc.sentences if _TURNOVER_CONTEXT.search(s.text)}
+    pages |= {p.number for p in doc.pages if _TURNOVER_CONTEXT.search(p.text or "")}
+    if not pages:
+        return []
+    out: list[Claim] = []
+    seen: set[tuple[int, float]] = set()
+
+    # Most certificates state the series as a grid, where the year and the amount are in different
+    # cells and the currency is only in the column header — so neither a sentence scan nor
+    # `parse_amounts` sees a thing.
+    for page in sorted(pages):
+        p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
+        if p is None or not p.tables:
+            continue
+        for yv in read_year_series(p.tables, want=TURNOVER_LABEL, avoid=DERIVED_LABEL):
+            if (yv.year, yv.value) in seen:
+                continue
+            seen.add((yv.year, yv.value))
+            s = Sentence(page=page, text=f"{yv.label or 'Turnover'} — FY {yv.year}-{str(yv.year + 1)[-2:]}: {yv.cell}",
+                         section=yv.label or "Turnover certificate", in_table=True)
+            out.append(_claim(spec.key, s, f"FY {yv.year}-{str(yv.year + 1)[-2:]}: {format_inr(yv.value)}",
+                              yv.value, year=yv.year, source="table"))
+
+    for s in doc.sentences:
+        if s.page not in pages:
+            continue
+        # A row of a bid-capacity working is not a turnover claim even on the same page: it states
+        # escalated values, and reading those as the bidder's turnover double-counts the factor.
+        if re.search(r"updat|factor|bid\s*capacity|work\s*in\s*hand", s.text, re.IGNORECASE):
+            continue
+        years = parse_financial_years(s.text)
+        amounts = parse_amounts(s.text)
+        if len(years) != 1:
+            continue
+        year = years[0]
+        if not amounts:
+            # "2022-23 | 0" — a stated nil year is evidence, and dropping it would let the bidder
+            # look as though they never reported that year at all.
+            if re.search(r"(?<![\d,.])0(?![\d,.])", s.text) and len(s.text) < 60:
+                key = (year, 0.0)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(_claim(spec.key, s, f"FY {year}-{str(year + 1)[-2:]}: nil", 0.0, year=year))
+            continue
+        amount = amounts[0].value
+        if (year, amount) in seen:
+            continue
+        seen.add((year, amount))
+        out.append(_claim(spec.key, s, f"FY {year}-{str(year + 1)[-2:]}: {format_inr(amount)}", amount, year=year))
+
+    # If figures on the same certificate were refused as corrupt, the years we did read are not the
+    # whole series — and a maximum taken over part of a series is not the maximum. One bidder's
+    # certificate states 0 for its first year and two crore-scale years the text layer mangled;
+    # without this, the readable nil becomes their turnover and fails them.
+    for page in sorted(pages):
+        p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
+        bad = corrupt_amounts(p.text or "") if p else []
+        if not bad:
+            continue
+        for c in out:
+            if c.page == page:
+                c.detail["series_incomplete"] = True
+                c.detail["unreadable"] = bad[:4]
+    return out
+
+
+# The bid-capacity certificate is the one piece of bidder evidence that is itself a calculation, so
+# it can disagree with the tender in ways a plain figure cannot: a different formula, a different
+# completion period, a different price-level base, or an age that puts it out of validity. Two of
+# the nine Warje bidders' certificates are computed on the PWD formula (A x N x 2 - B) and addressed
+# to the Public Works Department, with an explicit "shall not be used for any other purpose".
+_BID_CAPACITY_CONTEXT = re.compile(r"bid(?:ding)?\s*capacity", re.IGNORECASE)
+_BC_TOTAL = re.compile(
+    r"(?:total\s*bid\s*capacity|assessed\s*available\s*bid\s*capacity|bid\s*capacity)"
+    r"[^\n\d]{0,60}?(?P<amt>(?:rs\.?|inr|₹)?\s*\d[\d,\s]*(?:\.\d+)?\s*(?:lakhs?|lacs?|crores?)?)",
+    re.IGNORECASE)
+_BC_FORMULA = re.compile(r"\(?\s*A\s*[*x×]\s*N\s*[*x×]\s*(?P<k>[\d.]+)\s*\)?\s*[-–]\s*B", re.IGNORECASE)
+_BC_FORMULA_ALT = re.compile(r"\(?\s*A\s*[+*x×]\s*N\s*[*x×]\s*(?P<k>[\d.]+)\s*[-–]\s*B\s*\)?", re.IGNORECASE)
+_UDIN = re.compile(r"\bUDIN\b\s*[:\-]?\s*([0-9A-Z]{10,25})", re.IGNORECASE)
+_TENTATIVE = re.compile(r"\btentative\b|\bprovisional\b|\bestimated\s+bid\s+capacity\b", re.IGNORECASE)
+_N_VALUE = re.compile(r"\bN\s*[=:]\s*(?P<n>[\d.]+)\s*(?P<unit>year|yr|month|mth)", re.IGNORECASE)
+
+
+def find_bid_capacity(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """The bidder's assessed bid capacity, with whatever makes it non-comparable recorded on it."""
+    pages = sorted({s.page for s in doc.sentences if _BID_CAPACITY_CONTEXT.search(s.text)})
+    if not pages:
+        return []
+    want_k = float(spec.params.get("formula_multiplier") or 1.5)
+    want_years = spec.params.get("completion_years")
+    out: list[Claim] = []
+    for page in pages:
+        p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
+        # A page's text keeps table rows intact ("Total Bid Capacity (In Rs.) | 6,78,75,525"),
+        # where the label and the figure are separate cells and so separate sentences.
+        lines = (p.text or "").splitlines() if p else [s.text for s in doc.sentences if s.page == page]
+        blob = " ".join(lines)
+        total, quote = None, None
+        for line in lines:
+            if not _BC_TOTAL.search(line):
+                continue
+            amounts = parse_amounts(line)
+            cells = [cell_amount(c) for c in line.split("|")]
+            value = next((c for c in reversed(cells) if c is not None), None)
+            if value is None and amounts:
+                value = amounts[-1].value
+            if value is not None:
+                # A certificate states its conclusion last; earlier lines are the working.
+                total, quote = value, line.strip()
+        if total is None:
+            continue
+        best = Sentence(page=page, text=quote[:400], section="Bid capacity certificate", in_table=True)
+
+        defects: list[str] = []
+        fm = _BC_FORMULA.search(blob) or _BC_FORMULA_ALT.search(blob)
+        if fm:
+            k = float(fm.group("k"))
+            if abs(k - want_k) > 1e-6:
+                defects.append(f"computed as (A × N × {k:g}) − B, but this tender prescribes "
+                               f"(A × N × {want_k:g}) − B")
+        nm = _N_VALUE.search(blob)
+        if nm:
+            n = float(nm.group("n"))
+            if nm.group("unit").lower().startswith(("month", "mth")):
+                n /= 12
+            if want_years and abs(n - want_years) > 0.05:
+                defects.append(f"uses a completion period of {n:g} year(s); this tender's is {want_years:g}")
+        if _TENTATIVE.search(blob):
+            defects.append("is marked tentative, which the tender does not accept")
+        if not _UDIN.search(blob):
+            defects.append("carries no UDIN for the chartered accountant")
+        other = re.search(r"(?:issued|given)\s+specifically\s+to\s+([A-Z][^.\n]{4,60}?)\s*(?:and|\.|$)", blob)
+        if other and not re.search(r"pune\s+municipal|PMC\b", other.group(1), re.IGNORECASE):
+            defects.append(f"is addressed specifically to {other.group(1).strip()} and states it is "
+                           "not to be used for any other purpose")
+
+        value = f"{format_inr(total)}"
+        out.append(_claim(spec.key, best, value + (" — not comparable" if defects else ""), total,
+                          defects=defects, not_comparable=bool(defects), udin=bool(_UDIN.search(blob))))
     return out
 
 
@@ -191,6 +359,8 @@ def find_generic_document(doc: ParsedDocument, spec: CriterionSpec) -> list[Clai
 
 FINDERS: dict[str, Callable[[ParsedDocument, CriterionSpec], list[Claim]]] = {
     "avg_turnover": find_turnover,
+    "pmc_max_turnover": find_turnover_series,
+    "pmc_bid_capacity": find_bid_capacity,
     "similar_experience": find_experience,
     "gst_registration": find_gst,
     "epf_esic_registration": find_labour_registrations,

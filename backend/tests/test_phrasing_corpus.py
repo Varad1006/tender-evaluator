@@ -21,6 +21,15 @@ from app.adapters.pdf_parser import Sentence, _unwrap_rows
 from app.services.criteria_extraction import rule_key_personnel, rule_staff_strength
 from app.services.experience_ladder import build_ladder, find_rungs, find_window_years, satisfied_by
 from app.services.indexation import escalate, parse_index_table
+from app.services.values import corrupt_amounts, parse_amounts
+from app.services.year_tables import (
+    DERIVED_LABEL,
+    TURNOVER_LABEL,
+    WORK_DONE_LABEL,
+    cell_amount,
+    cell_year,
+    read_year_series,
+)
 from app.services.pmc_eligibility import _names_a_trade, _nature_in_clause
 
 
@@ -358,3 +367,112 @@ TRADE_FRAGMENTS = [
 @pytest.mark.parametrize("fragment,is_trade", TRADE_FRAGMENTS)
 def test_only_a_trade_description_can_be_a_nature_of_work(fragment, is_trade):
     assert _names_a_trade(fragment) is is_trade, f"{fragment!r}"
+
+
+# --------------------------------------------------------------------------------------------
+# 7. Bidder submissions: money a scan's text layer has damaged
+# --------------------------------------------------------------------------------------------
+# Bidder documents are scanned, stamped paper. Their text layers substitute letters for digits and
+# break Indian grouping with stray spaces, and both failures move money *downwards* — which is the
+# direction that disqualifies. Every row here is verbatim from one of the nine Warje submissions.
+
+REPAIRABLE = [
+    # Stray spaces inside the grouping carry no information, so they are removed.
+    ("Fina ncial Year 2019-20 Rs. 1,87 ,87 ,157 /-", 18787157),
+    ("Financial Y ear 2O22-23 Rs. 50,14,106/-", 5014106),
+    ("o Financial Year 2020-21 Rs. 30,03,325l/-", 3003325),   # trailing letter is noise, not a digit
+]
+
+
+@pytest.mark.parametrize("text,expected", REPAIRABLE)
+def test_spacing_damage_is_repaired_not_refused(text, expected):
+    got = parse_amounts(text)
+    assert got and got[0].value == expected, f"{[a.raw for a in got]}"
+
+
+UNREADABLE = [
+    "' Financial Year 2023-24 Rs. 7O,62,407/-",     # 70,62,407 — would read as Rs 7
+    "Financial Year 2027-22 Rs.77,83,O72/-",        # 77,83,072 — would read as Rs 7,783
+    "2 2023-24 L,26,40 ,423",                       # 1,26,40,423 — matches no currency pattern at all
+    "3 2024-25 2, L7 ,12,07 4",                     # 2,17,12,074
+]
+
+
+@pytest.mark.parametrize("text", UNREADABLE)
+def test_letter_for_digit_damage_is_refused_never_guessed(text):
+    """"O" is a 0 here and a 6 elsewhere. A guessed digit is a number the document never stated."""
+    assert corrupt_amounts(text), f"not detected as damaged: {text!r}"
+    for a in parse_amounts(text):
+        assert a.value > 10_000, f"a truncated {a.raw!r} was returned as {a.value}"
+
+
+NOT_DAMAGED = [
+    "PAN : AQRPD4656N",                                  # letters and digits, but no grouping
+    "UDIN : 25113775BMHXTG8789",
+    "F.R.No. 123357W",
+    "Flat No. 402, D Wing, Metro Greens Society",        # one comma, an address
+    "September 17, 2025",
+    "2020-2021 3,43,19,907/-",
+    "Gugale & Associates, Chartered Accountants",
+]
+
+
+@pytest.mark.parametrize("text", NOT_DAMAGED)
+def test_identifiers_and_addresses_are_not_mistaken_for_damaged_money(text):
+    assert corrupt_amounts(text) == [], f"false alarm on {text!r}"
+
+
+# --------------------------------------------------------------------------------------------
+# 8. A financial year, and the grids that state one
+# --------------------------------------------------------------------------------------------
+
+FY_SHAPES = [("2020-2021", 2020), ("2020-21", 2020), ("FY 2024-25", 2024), ("F.Y.2019-20", 2019)]
+
+
+@pytest.mark.parametrize("text,start", FY_SHAPES)
+def test_financial_years(text, start):
+    assert cell_year(text) == start
+
+
+NOT_FY = ["2027-22", "2O2O-27", "2020-2022", "36/18", "411043"]
+
+
+@pytest.mark.parametrize("text", NOT_FY)
+def test_pairs_that_are_not_financial_years(text):
+    """A scan turned 2021-22 into "2027-22". Filing a turnover under a year the certificate never
+    states is a misread, so only consecutive years count."""
+    assert cell_year(text) is None, f"{text!r} read as a financial year"
+
+
+CELL_AMOUNTS = [("3,43,19,907/-", 34319907), ("41,96,280", 4196280), ("Rs. 6,78,75,525", 67875525),
+                ("1.40", None), ("1 Year", None), ("03", None), ("", None), ("PARTICULARS", None)]
+
+
+@pytest.mark.parametrize("text,expected", CELL_AMOUNTS)
+def test_bare_cells_are_money_only_when_they_are_money(text, expected):
+    """Currency lives in the column header, so a cell is a bare number — but so is the escalation
+    factor sitting two rows below it."""
+    assert cell_amount(text) == expected
+
+
+def test_turnover_grid_is_read_row_wise():
+    """A turnover certificate: the year and its amount are in different cells of one row, and the
+    amount column's heading is what says the figures are turnover."""
+    rows = [["Financial Year", "Turnover (Rs)"],
+            ["2020-2021", "3,43,19,907/-"],
+            ["2021-2022", "2,81,82,821/-"],
+            ["2024-2025", "4,26,07,355/-"]]
+    got = read_year_series([rows], want=TURNOVER_LABEL, avoid=DERIVED_LABEL)
+    assert [(y.year, y.value) for y in got] == [(2020, 34319907), (2021, 28182821), (2024, 42607355)]
+
+
+def test_bid_capacity_grid_is_read_column_wise_without_the_derived_rows():
+    """The same figures turned ninety degrees, with the accountant's own escalation stacked under
+    them. Reading "Updated Value of Work" as turnover would apply the factor twice."""
+    rows = [["PARTICULARS", "2020-2021", "2021-2022"],
+            ["Amount of Work During the Year", "3,43,19,907", "2,81,82,821"],
+            ["Factor For Updating", "1.40", "1.30"],
+            ["Updated Value of Work", "4,80,47,870", "3,66,37,667"]]
+    raw = read_year_series([rows], want=WORK_DONE_LABEL, avoid=DERIVED_LABEL)
+    assert [(y.year, y.value) for y in raw] == [(2020, 34319907), (2021, 28182821)]
+    assert all("Updated" not in (y.label or "") for y in raw)
