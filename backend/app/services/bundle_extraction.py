@@ -17,7 +17,7 @@ from collections import Counter
 
 from app.adapters.pdf_parser import ParsedDocument, Sentence
 from app.adapters.readability import ENGLISH_KINDS
-from app.services import checklist_extraction, pmc_eligibility
+from app.services import checklist_extraction, experience_ladder, indexation, pmc_eligibility
 from app.services.bundle import NON_ELIGIBILITY_TYPES
 from app.services.criteria_extraction import (
     RULES,
@@ -148,6 +148,62 @@ def extract_bundle(docs: list[DocView], boqs: list[tuple[str, str, object]] | No
             extraction_method="deterministic", notes=["Amount from the tender's data sheet / notice."],
         )
 
+    # 2b. Price-level indexation ---------------------------------------------------------------
+    # PMC works print a multiplying-factor table beside each financial criterion; a bidder's older
+    # turnover and older project values are compared only after those factors are applied. The
+    # table rides on the criteria it governs so the bidder phase cannot forget it.
+    index_table = indexation.merge(indexation.find_index_tables(eligibility_docs))
+    if index_table is not None:
+        for key in ("pmc_max_turnover", "pmc_similar_works", "pmc_bid_capacity", "pmc_single_similar_work"):
+            c = drafts.get(key)
+            if c is None:
+                continue
+            c.params = {**c.params, "index_factors": dict(index_table.factors),
+                        "index_rate": index_table.implied_rate, "index_applies": index_table.consistent}
+            c.derivation = {**c.derivation, "index_page": index_table.page}
+            if index_table.consistent:
+                c.notes.append(
+                    f"Figures from earlier years are brought to current price level first "
+                    f"({', '.join(f'FY {y}-{str(y + 1)[-2:]} × {index_table.factors[y]:g}' for y in sorted(index_table.factors, reverse=True))}"
+                    f"; {index_table.doc_name or 'conditions'} p.{index_table.page}).")
+            c.notes.extend(index_table.notes)
+
+    # 2c. The experience ladder -----------------------------------------------------------------
+    # "3 works ≥ 40%, or 2 ≥ 50%, or 1 ≥ 80%" and its RFP equivalents. The PMC works path builds
+    # this from the qualification sheet; everywhere else the rungs sit in separate table cells,
+    # sometimes across a page break, and a single-sentence rule reads only the strictest one —
+    # which states the requirement three times too strictly.
+    if "pmc_similar_works" not in drafts:
+        for d in eligibility_docs:
+            sents = list(_english(d))
+            rungs = experience_ladder.find_rungs(sents)
+            e_value = float(facts["estimated_cost"].value) if facts["estimated_cost"].value is not None else None
+            ladder = experience_ladder.build_ladder(rungs, e_value) if rungs else None
+            if ladder is None:
+                continue
+            first = next((s for s in sents if s.page == ladder.rungs[0].page
+                          and s.text.strip()[:60] in ladder.rungs[0].quote), None)
+            source = first or Sentence(page=ladder.rungs[0].page, text=ladder.rungs[0].quote, section="Eligibility")
+            window = experience_ladder.find_window_years(sents)
+            notes = list(ladder.notes)
+            if len(ladder.pages) > 1:
+                notes.append(f"The options are printed across p.{'–'.join(str(p) for p in ladder.pages)}; "
+                             "all of them are alternatives, and meeting any one qualifies.")
+            drafts["min_similar_projects"] = CriterionDraft(
+                key="min_similar_projects", label="Similar Completed Projects (any one option)", bucket="Technical",
+                datatype="composite", operator="similar_works_any", tier="llm_judge",
+                threshold_display=ladder.display() + (f", last {window} yrs" if window else ""),
+                source=source, source_document_id=d.document_id, extraction_method="deterministic",
+                params={"window_years": window, "options": ladder.options(),
+                        "options_consistent": ladder.consistent,
+                        "implied_contract_value": ladder.implied_base if ladder.base_inferred else None},
+                derivation={"rungs": [{"count": r.count, "page": r.page, "quote": r.quote} for r in ladder.rungs],
+                            "implied_base": ladder.implied_base, "base_spread_pct": ladder.base_spread_pct},
+                notes=notes,
+            )
+            claimed.update((d.document_id, r.page, r.quote) for r in ladder.rungs)
+            break
+
     # 3. Sentence rules ----------------------------------------------------------------------
     def take(draft: CriterionDraft, d: DocView, s: Sentence) -> None:
         if draft.key in drafts:
@@ -234,7 +290,7 @@ def extract_bundle(docs: list[DocView], boqs: list[tuple[str, str, object]] | No
     # "Valid copy of CMMi3 certificate" after the criteria table asked for CMMi): the document is
     # the evidence for that criterion, not a second requirement.
     topics = [(r"^(?=.{0,80}$).*\bGSTN?\b", ["gst_registration"]),
-              (r"staff\s*strength|\bIT\s*Professionals?\b", ["min_staff_strength"]),
+              (r"staff\s*strength|\bIT\s*Professionals?\b|manpower\s*declaration", ["min_staff_strength"]),
               (r"^copy\s*of\s*(?:the\s*)?audited", ["avg_turnover", "pmc_max_turnover"]),
               (r"work\s*order.{0,40}completion|completion\s*certificate", ["min_similar_projects", "pmc_similar_works"]),
               (r"certificate\s*of\s*incorporation", ["years_in_existence"]),

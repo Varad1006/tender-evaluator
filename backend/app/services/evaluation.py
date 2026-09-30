@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.adapters.llm import LLMError
+from app.services import experience_ladder, indexation
 from app.services.bidder_extraction import Claim, CriterionSpec
 from app.services.values import format_inr, format_inr_short
 
@@ -55,6 +56,28 @@ def _numeric(spec: CriterionSpec, claims: list[Claim]) -> VerdictResult:
             return VerdictResult(spec.key, "unknown", "deterministic", "A value was found but could not be read as a number.",
                                  claims, unknown_kind="unparseable")
         return _not_found(spec)
+
+    # "Maximum turnover in any of the last five years" is answered by a *series* of figures, one
+    # per year. Five different numbers are what the tender asked for, not a contradiction — and
+    # the winner is decided after indexation, because an older, smaller year can overtake a newer
+    # one once it is brought to current rupees.
+    if spec.params.get("basis") == "max_annual" and len(usable) > 1:
+        table = indexation.table_from_params(spec.params)
+        scored = [(c, indexation.escalate(c.value_numeric, c.detail.get("year"), table)) for c in usable]
+        best_claim, best = max(scored, key=lambda cs: cs[1].value if cs[1] else 0)
+        threshold = spec.threshold_value
+        if threshold is None:
+            return VerdictResult(spec.key, "unknown", "deterministic", "Tender threshold could not be read.", usable,
+                                 unknown_kind="unparseable")
+        ok = best.value >= threshold
+        detail = best.explain() if best.applied else _fmt(spec, best.value)
+        return VerdictResult(
+            spec.key, "pass" if ok else "fail", "deterministic", evidence=[best_claim],
+            computation=f"{_fmt(spec, best.value)} {'≥' if ok else '<'} {_fmt(spec, threshold)}",
+            reason=f"Best of {len(usable)} year(s) stated: {detail}, against a requirement of ≥ {_fmt(spec, threshold)}."
+                   + (" The tender's multiplying factors were applied first." if best.applied else ""),
+            extra={"years_considered": len(usable), "indexed": best.applied},
+        )
 
     distinct = sorted({c.value_numeric for c in usable})
     if len(distinct) > 1:
@@ -178,6 +201,88 @@ def _similar_project(spec: CriterionSpec, claims: list[Claim], requirement_quote
                          reason="No qualifying project: " + "; ".join(why) + ".")
 
 
+def _similar_works_any(spec: CriterionSpec, claims: list[Claim], requirement_quote: str,
+                       reference: date, llm) -> VerdictResult:
+    """The experience ladder: any one of "3 works ≥ X, or 2 ≥ Y, or 1 ≥ Z" qualifies.
+
+    Two rules govern what this may conclude, and both exist because a wrong disqualification is
+    the worst thing this tool can produce:
+
+      * **Values are indexed first.** When the tender prints multiplying factors, a project
+        completed in an earlier year counts at its escalated value. Comparing the raw figure
+        understates what the tender itself offers the bidder.
+      * **It never returns `fail`.** Passing needs `count` qualifying projects; failing would need
+        proof that no further qualifying project exists anywhere in the submission, and an
+        extractor that missed one cannot tell that apart from a bidder that has none. So a
+        shortfall is `unknown`, naming exactly how many were found against each option.
+    """
+    options = [o for o in (spec.params.get("options") or []) if o.get("min_value") is not None]
+    if not options:
+        return VerdictResult(spec.key, "unknown", "deterministic", unknown_kind="unparseable", evidence=claims,
+                             reason="The tender's options for this requirement could not be read as values.")
+    if not spec.params.get("options_consistent", True):
+        return VerdictResult(spec.key, "unknown", "deterministic", unknown_kind="unparseable", evidence=claims,
+                             reason="The tender's options do not agree on one contract value, so no bidder is "
+                                    "judged against them until the committee confirms the figures.")
+    if not claims:
+        return _not_found(spec, "completed projects of the required nature")
+
+    table = indexation.table_from_params(spec.params)
+    window = spec.params.get("window_years") or 0
+    earliest = reference.year - window if window else None
+    lowest = min(o["min_value"] for o in options)
+
+    qualifying: list[tuple[Claim, float, str]] = []
+    rejected: list[str] = []
+    tier = "deterministic"
+    for c in claims:
+        if c.value_numeric is None:
+            continue
+        year = c.detail.get("year")
+        if earliest is not None and year is not None and year < earliest:
+            rejected.append(f"{format_inr_short(c.value_numeric)} completed {year}, before the {window}-year window")
+            continue
+        esc = indexation.escalate(c.value_numeric, year, table)
+        value = esc.value if esc else c.value_numeric
+        if value < lowest:
+            rejected.append(f"{format_inr_short(value)} is below the lowest option ({format_inr_short(lowest)})")
+            continue
+        nature, judged_tier, rationale = _judge_nature(spec, c, requirement_quote, llm)
+        if judged_tier != "deterministic":
+            tier = judged_tier
+        if nature == "similar":
+            qualifying.append((c, value, esc.explain() if esc and esc.applied else format_inr_short(value)))
+        elif nature == "uncertain":
+            rejected.append(f"{format_inr_short(value)} needs evaluator judgement on nature — {rationale}")
+        else:
+            rejected.append(f"{format_inr_short(value)} is not of the required nature — {rationale}")
+
+    met = experience_ladder.satisfied_by(options, [v for _, v, _ in qualifying])
+    if met:
+        floor = met["min_value"]
+        used = [(c, v, shown) for c, v, shown in qualifying if v >= floor][: met["count"]]
+        indexed = [shown for _, _, shown in used if "×" in shown]
+        return VerdictResult(
+            spec.key, "pass", tier, evidence=[c for c, _, _ in used],
+            computation=f"{met['count']} × ≥ {format_inr_short(floor)} ✓",
+            reason=f"Qualifies on the {met['count']}-project option: "
+                   + ", ".join(shown for _, _, shown in used)
+                   + f" against ≥ {format_inr_short(floor)} each."
+                   + (" Earlier years were brought to current price level first." if indexed else ""),
+            extra={"option": met["count"], "indexed": bool(indexed)},
+        )
+
+    found = experience_ladder.shortfall(options, [v for _, v, _ in qualifying])
+    return VerdictResult(
+        spec.key, "unknown", tier, unknown_kind="not_found",
+        evidence=[c for c, _, _ in qualifying][:3] or claims[:2],
+        reason=f"No option is met by the projects located: {found}. "
+               + (f"Set aside: {'; '.join(rejected[:3])}. " if rejected else "")
+               + "Treated as unknown, not as a failure — a project the extraction missed would change this.",
+        extra={"shortfall": found},
+    )
+
+
 def evaluate_criterion(spec: CriterionSpec, claims: list[Claim], requirement_quote: str,
                        reference: date | None = None, llm=None) -> VerdictResult:
     reference = reference or date.today()
@@ -192,6 +297,8 @@ def evaluate_criterion(spec: CriterionSpec, claims: list[Claim], requirement_quo
             return _exists_all(spec, claims)
         if spec.operator == "similar_project":
             return _similar_project(spec, claims, requirement_quote, reference, llm)
+        if spec.operator == "similar_works_any":
+            return _similar_works_any(spec, claims, requirement_quote, reference, llm)
     except (ArithmeticError, TypeError, ValueError) as exc:  # FSD 7.3: never crash the batch
         log.exception("Evaluation error for %s", spec.key)
         return VerdictResult(spec.key, "unknown", "deterministic", "This value could not be evaluated automatically.",

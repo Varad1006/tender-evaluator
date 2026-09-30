@@ -258,7 +258,12 @@ def rule_net_worth(s: Sentence) -> CriterionDraft | None:
 
 
 def rule_staff_strength(s: Sentence) -> CriterionDraft | None:
-    m = re.search(r"staff\s+strength\s+of\s+(?:minimum|at least)\s+(\d+)\s+([A-Za-z ]{2,40}?)(?:professionals?|employees|staff)", s.text, re.I)
+    # "…of minimum 30 IT professionals", "…of a minimum of 30 IT Professionals" (PMC DBT RFP p.15),
+    # "…of at least 30 …": the article and the second "of" are optional decoration around the count.
+    # The descriptor between the count and the noun is optional — "30 IT Professionals" names one,
+    # "40 employees" does not, and requiring it dropped the second shape entirely.
+    m = re.search(r"staff\s+strength\s+of\s+(?:a\s+)?(?:minimum|at\s+least|not\s+less\s+than)\s*(?:of\s+)?"
+                  r"(\d+)\s+([A-Za-z ]{0,40}?)(?:professionals?|employees|staff)", s.text, re.I)
     if not m or not _required(s):
         return None
     n = int(m.group(1))
@@ -312,8 +317,26 @@ _ROLE = (r"(Project\s*Manager|Site\s*Engineer|Site\s*In-?charge|Resident\s*Engin
 _QUAL = r"\b(B\.?\s*E\.?|B\.?\s*Tech|M\.?\s*E\.?|M\.?\s*Tech|Graduat\w*|Diploma|D\.?\s*C\.?\s*E\.?|Degree)(?![a-z])"
 
 
+# Stationing people at the site is something the *contractor does during the work*, not something
+# the *bidder must already be* to qualify. The two read almost alike — both name a role, a degree
+# and a number of years — but only one is a gate, and a works volume states both: PMC drainage
+# bundle 2286446 asks for "two nos of experienced Civil Engineers B.E (civil) at each site … 3
+# years' experience of execution" in its execution clauses, while its qualification table asks for
+# "Engineer B.E. Civil / DCE / Technical Staff … min. 5 Years". Reading the execution clause as the
+# criterion sets the bar at 3 years when the tender requires 5, and passes a bidder the committee
+# would reject.
+_DEPLOYMENT = re.compile(
+    r"\b(?:keep|depute|deploy|station|post|engage|appoint)\b[^.]{0,90}\bat\s+(?:each|every|the|all)?\s*sites?\b"
+    r"|\bat\s+(?:each|every)\s+site\b"
+    r"|\bon\s+(?:the\s+)?site\s+of\s+(?:the\s+)?works?\b",
+    re.IGNORECASE,
+)
+
+
 def rule_key_personnel(s: Sentence) -> CriterionDraft | None:
     ctx = _context(s)
+    if _DEPLOYMENT.search(ctx):
+        return None
     role = re.search(_ROLE, ctx, re.I)
     years = re.search(r"(\d{1,2})\s*\+?\s*(?:years?|yrs?)['’]?\s*(?:of\s*)?(?:total\s*|relevant\s*)?experience"
                       r"|experience\s*(?:of\s*)?(?:min(?:imum)?\.?\s*)?(\d{1,2})\s*(?:years?|yrs?)", ctx, re.I)

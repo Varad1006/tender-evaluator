@@ -58,7 +58,7 @@ Run the whole corpus from the command line (OCR results are cached per file hash
 
 ```bash
 uv run python scripts/corpus_report.py "/path/to/Dataset Tenders" --ocr --json report.json
-uv run python scripts/score_corpus.py report.json   # accuracy vs tests/data/corpus_truth.json (243 hand-verified checks)
+uv run python scripts/score_corpus.py report.json   # accuracy vs tests/data/corpus_truth.json (297 hand-verified checks)
 ```
 
 ### Optional: LLM-assisted extraction (Gemini)
@@ -152,7 +152,7 @@ never collapsed to one side. Comparison and ranking are recomputed live from the
 ## Tests
 
 ```bash
-cd backend && uv run pytest        # 57 tests; corpus golden + accuracy tests run when ~/Desktop/Dataset Tenders exists (or TE_CORPUS_DIR), replaying the OCR cache offline
+cd backend && uv run pytest        # 117 tests; corpus golden + accuracy tests run when ~/Desktop/Dataset Tenders exists (or TE_CORPUS_DIR), replaying the OCR cache offline
 cd frontend && npm run build       # type-check + production build
 ```
 

@@ -174,8 +174,13 @@ def read_qualification_sheet(docs: list[DocView]) -> QualificationSheet | None:
                         vals = _lakh_amounts(last)
                         sheet.bid_capacity = vals[0] if vals else None
                         sheet.rows["bid_capacity"] = joined
-            hand = getattr(p, "handwritten", [])
-            struck = getattr(p, "struck", [])
+            # `handwritten` and `struck` are collected for the whole page, and on this sheet almost
+            # everything handwritten is a *number*: the parameters column is filled in by hand, and
+            # Chandra marks a clerk's correction to a figure as struck. Only a fragment that names a
+            # trade can be the nature of work — otherwise the sheet reports "printed '36.55' is
+            # struck out and replaced with 'sewer /storm water line'", which is not true of anything.
+            hand = [h for h in getattr(p, "handwritten", []) if _names_a_trade(h)]
+            struck = [s for s in getattr(p, "struck", []) if _names_a_trade(s)]
             if hand:
                 sheet.nature = " / ".join(dict.fromkeys(h.strip(" ,.") for h in hand))
             if struck:
@@ -269,6 +274,38 @@ def _stated_turnover(sentence: str) -> StatedAmount:
     unit = 10_000_000 if unit_word.startswith("cr") else 100_000 if unit_word else 1
     w = re.search(r"\(\s*Rs\.?\s*([A-Za-z][A-Za-z\s]+?(?:Rupees|Paise)[A-Za-z\s]*?)\s*\.?\s*\)", sentence)
     return StatedAmount(digits, unit, words_to_amount(w.group(1)) if w else None, blank, m.group(0) if m else "")
+
+
+# "(sewer /storm water line/retaining wall)" after the noun. A parenthetical that is arithmetic
+# ("(A x N x 1.5)") or a bare clause label ("(a)") names no trade and is refused.
+_NATURE_PAREN = re.compile(r"\b(?:completed\s+|similar\s+)?(?:works?|projects?)\s*\(\s*([^)]{4,90}?)\s*\)", re.IGNORECASE)
+
+
+def _names_a_trade(fragment: str) -> bool:
+    """Does this fragment describe a kind of work, rather than state a figure?
+
+    "sewer /storm water line/retaining wall" does; "36.55", "Rs. 19.49 lacs" and "03" do not. Used
+    to keep the filled-in numbers on a qualification sheet from being read as a nature of work.
+    """
+    text = (fragment or "").strip()
+    letters = sum(c.isalpha() for c in text)
+    if letters < 4:
+        return False
+    # A figure with its unit spelled out is still a figure.
+    return not re.fullmatch(r"(?:rs\.?|inr|₹)?[\s\d.,/%()-]*(?:lacs?|lakhs?|crores?|cr|nos?|rmt|sqm|cum|years?|months?|days?)?"
+                            r"[\s\d.,/%()-]*", text, re.IGNORECASE)
+
+
+def _nature_in_clause(quote: str) -> str | None:
+    for m in _NATURE_PAREN.finditer(quote):
+        inner = re.sub(r"\s+", " ", m.group(1)).strip(" ,;")
+        letters = sum(c.isalpha() for c in inner)
+        if letters < 6 or letters < 0.5 * len(inner):
+            continue
+        if re.fullmatch(r"(?:[ivx]+|[a-z]|\d+)", inner, re.IGNORECASE):
+            continue
+        return inner
+    return None
 
 
 def _reconcile(stated: float | None, e_put: float | None, e_total: float | None, fn, what: str) -> tuple[float | None, list[str], str]:
@@ -387,6 +424,14 @@ def build(docs: list[DocView], facts: dict[str, Fact], authority_is_pmc: bool) -
         mins = [round(p * E, 2) if E else None for p in pcts]
     options = [{"count": c, "min_value": m, "pct": int(p * 100)} for c, m, p in zip((3, 2, 1), mins, pcts)]
     nature = sheet.nature if sheet and sheet.nature else None
+    if not nature and where is not None:
+        # The clause names the nature in a parenthetical right after the noun — "Three completed
+        # works (sewer /storm water line/retaining wall) costing not less than …". That is printed
+        # English on the conditions page, so it is available even when the signed qualification
+        # sheet (where the nature is sometimes handwritten) is a scan we could not read.
+        nature = _nature_in_clause(where.quote or "")
+        if nature:
+            notes.append(f"Nature of similar work is taken from the clause on p.{where.page}: “{nature}”.")
     inferred_nature = None
     if not nature:
         dept = str(facts["department"].value or "").lower()

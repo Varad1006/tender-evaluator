@@ -111,10 +111,17 @@ def test_accuracy_against_ground_truth_with_cached_ocr():
                      sleep=lambda s: None, requests_per_minute=10_000)
     truth = json.loads(TRUTH.read_text())
     misses = []
+    scored, absent = 0, []
     for name, want in truth.items():
         if name.startswith("_"):
             continue
         root = CORPUS / name if (CORPUS / name).exists() else CORPUS / "Archive" / name
+        # The ground truth grows as tenders are collected, and no two machines hold the same
+        # download folder. A tender that is not on this one is skipped, not counted as a miss.
+        if not root.exists():
+            absent.append(name)
+            continue
+        scored += 1
         files = [(f.name, f) for f in sorted(root.rglob("*")) if f.is_file() and not f.name.startswith(".")] \
             if root.is_dir() else [(root.name, root)]
         with tempfile.TemporaryDirectory() as tmp:
@@ -123,4 +130,6 @@ def test_accuracy_against_ground_truth_with_cached_ocr():
             run_ocr(docs, ocr)
             _, missed = score_tender(entry(name, extract(docs)), want)
         misses += [f"{name}: {m}" for m in missed]
-    assert not misses, "\n".join(misses)
+    if not scored:
+        pytest.skip(f"none of the {len(absent)} ground-truth tenders are in {CORPUS}")
+    assert not misses, "\n".join(misses) + (f"\n(skipped, not on this machine: {', '.join(absent)})" if absent else "")

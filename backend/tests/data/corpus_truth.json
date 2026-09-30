@@ -411,5 +411,114 @@
    "completion_days",
    "pmc_max_turnover"
   ]
+ },
+ "work_2286446": {
+  "_source": "PMC Drainage bundle work_2286446 (64TenderNoticeDTP / 64datasheet / 64Condishion / 64TAbstractTS / BOQ_2286446.xls). Notice, data sheet and abstract are scans; the data sheet's qualification parameters are handwritten.",
+  "facts": {
+   "ref_no": "PMC/DRAINAGE/2026/64",
+   "estimated_cost": 4872695,
+   "total_estimated_cost": 5949875,
+   "emd": 48727,
+   "security_deposit": 243635,
+   "completion_months": 12,
+   "dlp_months": 60,
+   "cost_of_tender_doc": 6079
+  },
+  "award": "L1",
+  "criteria": {
+   "pmc_max_turnover": {
+    "value": 3655000
+   },
+   "pmc_similar_works": {
+    "options": [
+     1949000,
+     2437000,
+     3899000
+    ],
+    "nature_contains": "sewer"
+   },
+   "pmc_bid_capacity": {
+    "value": 4872695
+   },
+   "pmc_emd": {
+    "value": 48727
+   },
+   "pmc_registration": {},
+   "no_joint_venture": {},
+   "personnel_civil_engineer": {
+    "min_years": 5
+   },
+   "pmc_key_quantities": {
+    "items": {
+     "600": 99,
+     "900": 45,
+     "Manhole": 3
+    }
+   }
+  },
+  "must_not": [
+   "completion_days",
+   "site_engineer"
+  ]
+ },
+ "RFP PCMC-Encroachment 1.pdf": {
+  "_source": "PCMC encroachment-monitoring RFP, tender 03/2024 dated 11/10/2024. Eligibility table p.23-26, award p.30. Criterion (d) asks for prefab hospital structures — a template contamination the tender never corrects; it is extracted as written.",
+  "facts": {
+   "emd": 41798
+  },
+  "award": "L1",
+  "criteria": {
+   "avg_turnover": {
+    "value": 1300000
+   },
+   "positive_net_worth": {},
+   "min_similar_projects": {
+    "options": [
+     1700000,
+     2100000,
+     3400000
+    ]
+   },
+   "emd": {
+    "value": 41798
+   }
+  },
+  "labels_contain": [
+   "turnover",
+   "net worth"
+  ]
+ },
+ "RetenderDBTRFP 2.pdf": {
+  "_source": "PMC IT re-tender for the Benefit Management System, PMC/IT/2025/17. Pre-qualification table p.14-15, technical rubric p.16-17 (100 marks, A25/B50/C10/D15), award p.12.",
+  "facts": {
+   "ref_no": "PMC/IT/2025/17",
+   "emd": 80000
+  },
+  "award": "L1",
+  "criteria": {
+   "avg_turnover": {
+    "value": 40000000
+   },
+   "min_similar_projects": {
+    "options": [
+     3200000,
+     4000000,
+     6400000
+    ]
+   },
+   "technical_score_gate": {
+    "value": 70
+   },
+   "emd": {
+    "value": 80000
+   },
+   "min_staff_strength": {
+    "value": 30
+   }
+  },
+  "must_not_labels": [
+   "Valid CMMi…",
+   "Valid ISO…"
+  ]
  }
 }

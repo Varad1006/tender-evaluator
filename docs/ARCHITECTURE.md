@@ -20,8 +20,11 @@ upload (zip / rar / pdf / xls, several at once)
    └─ BOQ .xls        xlrd: estimated amount, contract no., Percentage / Item-rate
    │
    ▼
-2. EXTRACT            facts → PMC standard criteria → sentence rules → checklists → award
+2. EXTRACT            facts → PMC standard criteria → indexation + experience ladder →
+   │                  sentence rules → checklists → award
    │                  ► persisted immediately; the UI shows usable criteria within seconds
+   │                  ► the ladder and the indexation table are read across sentences and pages,
+   │                    because neither fits in the one sentence a rule sees
    ▼
 3. OCR TIER (background, only what the local tier could not read)
    ├─ router          pages classed image / garbled / lossy-Marathi, in eligibility documents,
@@ -81,6 +84,17 @@ clauses directly and the English criterion label comes from the PMC standard. A 
 * **A corrigendum supersedes.** A short document titled Corrigendum / Addendum / शुद्धिपत्रक is its own
   role; its revised values ("Existing | Revised" tables, "… revised to Rs. …") win, and the fact shows
   "Changed by corrigendum" with the original value noted — never a conflict.
+* **A clause's label does not settle which base it used.** "1% of the tender cost (Total Estimated
+  Cost)" is in fact 1% of the cost put to tender excluding GST, in the one bundle where both figures
+  and the resulting EMD are all printed. Bases are decided by trying both and reporting which one
+  the tender's own figure matches, never by the wording.
+* **Past money is compared after indexation.** Where the tender prints multiplying factors by
+  financial year, turnover, completed-work values and the bid-capacity `A` term are escalated to
+  current price level first. The factors are read from the document and applied only if they form
+  one geometric progression (`indexation.py`).
+* **The options in an experience ladder must divide back to one contract value.** 40 / 50 / 80% of
+  the same number, whether the tender prints the percentages or only the amounts. A rung that
+  implies a different value was misread and the ladder is reported rather than used.
 
 ## Edge cases handled
 
@@ -95,17 +109,35 @@ clauses directly and the English criterion label comes from the PMC standard. A 
 | text | numbered list items run together in one sentence ("…below- 1 GST … 2 PF code … 3 …") | each item is its own paragraph and inherits its intro's obligation |
 | text | words run together by the text layer ("EARNESTMONEYDEPOSIT", "calendarmonths") | whitespace-tolerant patterns for the key facts |
 | tables | a row split across a page break | continuation joined to the previous item |
+| tables | a tall cell ruled into one row per visual line, with the next column's lines interleaved between them | a row whose serial-number column is empty is a continuation and is folded into the row above (`_unwrap_rows`) |
+| criteria | alternatives ("3 works ≥ 40%, **or** 2 ≥ 50%, **or** 1 ≥ 80%") spread over cells and pages | collected into one criterion; reading a single rung would state the requirement three times too strictly |
+| criteria | a personnel clause that stations staff at the site during execution | not an eligibility gate — the qualification table's own row is |
 | checklists | data sheets, fill-in financial formats, boxed clauses, tables of contents, chapter headings, clause mentions of "qualification criteria" | not treated as requirement lists |
 | checklists | summary tables and submission lists restating a criterion ("Staff", "Documental proof of GSTN") | folded into that criterion as evidence |
 | criteria | key-quantity grid printed blank | item names listed; 30 % of each BOQ quantity applies; window (3 or 5 years) read from the clause |
 
 ## Accuracy harness
 
-`tests/data/corpus_truth.json` holds values verified by reading the pages (243 checks: facts,
-thresholds, similar-work options, key quantities, personnel, required and forbidden labels).
-`scripts/score_corpus.py` scores a `corpus_report.py --json` run against it, and
+`tests/data/corpus_truth.json` holds values verified by reading the pages (297 checks over 17
+tenders: facts, thresholds, similar-work options, key quantities, personnel, required and forbidden
+labels). `scripts/score_corpus.py` scores a `corpus_report.py --json` run against it, and
 `tests/test_corpus_golden.py::test_accuracy_against_ground_truth_with_cached_ocr` replays the OCR
-cache offline and fails on any miss. Current: **243 / 243**.
+cache offline and fails on any miss. A tender in the ground truth but not in this machine's corpus
+folder is skipped rather than counted as a miss, so the truth can grow ahead of any one download.
+
+Current: **243 / 243** on the original 13 tenders + RFP, and **54 / 54** on the three added in
+Sep 2026 (work_2286446, PCMC encroachment RFP, PMC DBT RFP).
+
+The three added tenders score **51 / 54 from the local text layer alone**. The hybrid tier closes
+the gap: work_2286446's key BOQ quantities are handwritten on a scanned data-sheet page, and
+Chandra reads them exactly ("NP-III RCC Pipe - 600mm | 99 | Rmt"). OCR also recovers that bundle's
+Marathi work name, its tender category, contract type B1 and pre-bid flag, and moves the turnover,
+similar-works and bid-capacity citations onto the signed qualification sheet they actually come
+from. 45 pages, about 70 s, cached thereafter.
+
+`tests/test_phrasing_corpus.py` is the other half of the instrument: how authorities word each
+requirement, and — the important half — the wordings that must **not** be read as one. A tender that
+exposes a bug gets a row there, not a patch to the reader.
 
 ## Throughput on the corpus (13 tenders + 1 RFP, ~1,100 pages)
 
@@ -128,6 +160,8 @@ cache offline and fails on any miss. Current: **243 / 243**.
 | router, orchestration | `app/services/tender_processing.py` |
 | facts + reconciliation | `app/services/pmc_facts.py` |
 | PMC standard criteria | `app/services/pmc_eligibility.py` |
+| experience ladder ("3 × 40%, or 2 × 50%, or 1 × 80%") | `app/services/experience_ladder.py` |
+| price-level indexation (multiplying factors by FY) | `app/services/indexation.py` |
 | checklists | `app/services/checklist_extraction.py` |
 | bundle extraction | `app/services/bundle_extraction.py` |
 | API job (persist local, then OCR) | `app/services/pipeline.py` (`process_tender`) |

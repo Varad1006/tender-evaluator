@@ -77,6 +77,35 @@ class ParsedDocument:
         return self.pages[number - 1].text if 0 < number <= len(self.pages) else ""
 
 
+def _unwrap_rows(rows: list[list[str]]) -> list[list[str]]:
+    """Rejoin a tall table cell that came back as one cell per visual line.
+
+    In a numbered criteria table pdfplumber often rules every line, so one requirement becomes four
+    rows — and the neighbouring column's lines are interleaved between them. PMC's DBT RFP p.15
+    splits "Manpower Declaration: The Bidder must have an on-roll staff strength of a minimum of 30
+    IT Professionals …" across rows 11, 12, 14 and 16, with the evidence column occupying 13 and 15.
+    Read row by row it states no number at all.
+
+    The table's own semantics say where a record begins: the serial-number column is filled on the
+    first line of a requirement and empty on its continuations. So a row with an empty label column
+    is folded into the row above, column by column. Tables without such a column (a plain two-column
+    key/value form) are left alone — every row there is its own record.
+    """
+    width = max((len(r) for r in rows), default=0)
+    if width < 2 or sum(1 for r in rows if r and (r[0] or "").strip()) < 2:
+        return rows
+    out: list[list[str]] = []
+    for row in rows:
+        cells = [(c or "").strip() for c in row] + [""] * (width - len(row))
+        if out and not cells[0] and any(cells[1:]):
+            for i in range(1, width):
+                if cells[i]:
+                    out[-1][i] = f"{out[-1][i]} {cells[i]}".strip()
+            continue
+        out.append(cells)
+    return out
+
+
 def _is_bold(chars: list[dict]) -> bool:
     visible = [c for c in chars if c["text"].strip()]
     if not visible:
@@ -372,6 +401,7 @@ def parse_pdf(path: str | Path, strict: bool = True, only_pages: set[int] | None
             for rows in tables:
                 for row in rows:
                     page_parts.append(" | ".join(c for c in row if c))
+                for row in _unwrap_rows(rows):
                     cells = tuple(c for c in row if c)
                     for cell in cells:
                         clause_match = CLAUSE_PREFIX.match(cell)
