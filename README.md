@@ -43,10 +43,11 @@ local extraction first (results in seconds), then Chandra OCR in the background 
 cannot read (scans, garbled OCR layers, legacy-font and Marathi pages). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 and what the corpus taught us in [docs/CORPUS_FINDINGS.md](docs/CORPUS_FINDINGS.md).
 
-OCR uses the Datalab API. Put the key in `backend/.env` (git-ignored):
+OCR uses the Datalab API. Copy the template and put your key in `backend/.env` (git-ignored):
 
-```
-DATALAB_API_KEY=...
+```bash
+cp backend/.env.example backend/.env   # then set DATALAB_API_KEY
+./dev.sh                               # backend :8010 + frontend :5180, Ctrl-C stops both
 ```
 
 Without a key everything still works; unread pages are listed and affected criteria show as *derived — confirm*.
