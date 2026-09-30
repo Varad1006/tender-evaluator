@@ -39,12 +39,21 @@ QUOTABLE_KINDS = {"english", "ocr_en", "ocr_mr"}  # text we are willing to show 
 NEEDS_OCR = {"image", "garbled", "marathi"}  # local text is missing, junk, or lossy Devanagari
 
 
+# Some scans come back with a space between almost every letter — "W O R K C O M PL E T I O N
+# CERTI F I CA TE", "Ac c ept ed t en der Am oun t". Every word-level check above passes on such a
+# page, and its numbers come out as "2t7.t2" for 217.12, so it reads as English and yields
+# nonsense. Measured across bidder submissions and tender volumes the two populations do not
+# overlap: damaged pages sit at 0.40 and every clean page below 0.10.
+_SPACED_OUT = 0.20
+
+
 @dataclass(frozen=True)
 class PageQuality:
     kind: str  # english | marathi | garbled | image | blank | ocr_en | ocr_mr
     common_ratio: float = 0.0
     weird_ratio: float = 0.0
     odd_ratio: float = 0.0
+    spaced_ratio: float = 0.0
 
     @property
     def machine_readable(self) -> bool:
@@ -65,8 +74,10 @@ def classify_page(text: str) -> PageQuality:
     common = sum(1 for w in words if w in COMMON_WORDS) / max(1, len(words))
     weird = (len(_WEIRD.findall(t)) + 3 * len(_CID.findall(t))) / max(1, len(t))
     odd = sum(1 for w in tokens if _ODD_TOKEN.search(w)) / max(1, len(tokens))
+    letters = re.findall(r"[A-Za-z]+", t)
+    spaced = sum(1 for w in letters if len(w) == 1) / len(letters) if len(letters) >= 25 else 0.0
     if dev > 80 and dev > 0.6 * lat:
-        return PageQuality("marathi", common, weird, odd)
-    if lat > 50 and common >= 0.08 and weird < 0.02 and odd < 0.12:
-        return PageQuality("english", common, weird, odd)
-    return PageQuality("garbled", common, weird, odd)
+        return PageQuality("marathi", common, weird, odd, spaced)
+    if lat > 50 and common >= 0.08 and weird < 0.02 and odd < 0.12 and spaced < _SPACED_OUT:
+        return PageQuality("english", common, weird, odd, spaced)
+    return PageQuality("garbled", common, weird, odd, spaced)

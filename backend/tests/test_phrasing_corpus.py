@@ -22,6 +22,7 @@ from app.services.criteria_extraction import rule_key_personnel, rule_staff_stre
 from app.services.experience_ladder import build_ladder, find_rungs, find_window_years, satisfied_by
 from app.services.indexation import escalate, parse_index_table
 from app.services.values import corrupt_amounts, parse_amounts
+from app.services.work_proof import NOT_WORK_PROOF, _from_table, _role_of
 from app.services.year_tables import (
     DERIVED_LABEL,
     TURNOVER_LABEL,
@@ -476,3 +477,110 @@ def test_bid_capacity_grid_is_read_column_wise_without_the_derived_rows():
     raw = read_year_series([rows], want=WORK_DONE_LABEL, avoid=DERIVED_LABEL)
     assert [(y.year, y.value) for y in raw] == [(2020, 34319907), (2021, 28182821)]
     assert all("Updated" not in (y.label or "") for y in raw)
+
+
+# --------------------------------------------------------------------------------------------
+# 9. Work proof, in whatever shape the bidder sent it
+# --------------------------------------------------------------------------------------------
+# No two bidders prove completed work the same way, so the reader looks for a record — a
+# description, a sum, a date it finished — rather than a schema. What it must never do is credit a
+# bidder with work they have not done.
+
+FORM_II = [
+    ["Sr. No.", "", "", "Name of work", "", "", "Cost of work", "", "",
+     "Date of starting", "", "", "", "Stipulated", "", "", "Actual date", "", "Remarks", "", ""],
+    ["", "", "", "", "", "", "", "", "", "", "", "", "", "date of", "", "", "of", "", "", "", ""],
+    ["", "", "", "", "", "", "", "", "", "", "", "", "", "completion", "", "", "completion", "", "", "", ""],
+    ["1.", "", "", "Development of 24m DP road at Mahammadwadi", "", "", "10,33,94,909.00", "", "",
+     "01.02.2024", "", "", "February 25", "", "", "March -25", "", "", "100 % completed", "", ""],
+    ["2.", "", "", "Design, development of Scientific landfill", "", "", "17,84,87,759", "", "",
+     "11.09.2019", "", "", "11.09.2020", "", "", "25.11.2020", "", "", "100 % Completed", "", ""],
+]
+
+
+def test_a_statement_of_completed_works_is_read():
+    got = _from_table(FORM_II, page=91)
+    assert [int(r.value) for r in got] == [103394909, 178487759]
+    assert [r.year for r in got] == [2025, 2020]
+    assert [r.value_label for r in got] == ["Cost of work", "Cost of work"]
+
+
+def test_the_heading_may_sit_a_column_off_from_its_own_data():
+    """In this bidder's grid both completion headings land one column right of their figures, so
+    an exact-index lookup reads every completion date as blank and loses the five-year window."""
+    got = _from_table(FORM_II, page=91)
+    assert all(r.year is not None for r in got), "column drift lost the completion dates"
+    assert got[0].date == "March -25" and got[0].year_certain is False
+    assert got[1].date == "25.11.2020" and got[1].year_certain is True
+
+
+WORK_IN_HAND = [
+    ["Sr.", "Name of work", "Cost of Contract", "Cost of Remaining Work",
+     "Anticipated Date of Completion", "Estimated Cost"],
+    ["1", "Kondhwa Khurd sports ground", "8,66,58,616", "2,80,93,693", "03.01.2025", "8,66,58,616"],
+]
+
+
+def test_work_in_hand_is_not_completed_work():
+    """Form I and Form II are the same grid under different headings, and the difference is the
+    whole point: this bidder has not finished any of it."""
+    assert _from_table(WORK_IN_HAND, page=88) == []
+
+
+BILL_OF_QUANTITIES = [
+    ["It. No.", "Item", "Executed Qty", "Rate", "Amount"],
+    ["4", "Construction of granular sub-base by providing crushed stone", "1053.374 cum", "2152", "22,66,861"],
+    ["9", "Providing and laying Cast in situ Ready Mix concrete", "585.914 cum", "3390", "19,86,248"],
+]
+
+
+def test_bill_of_quantities_lines_are_not_separate_completed_works():
+    """One bidder's work order yielded nine "completed works", one per priced line of a single
+    contract. A BOQ has a description and a money column; what it has no column for is a date the
+    work finished."""
+    assert _from_table(BILL_OF_QUANTITIES, page=131) == []
+
+
+NOT_PROOF_PAGES = [
+    "INDIAN INCOME TAX RETURN ACKNOWLEDGEMENT Assessment Year 2024-25 Total Income 14,75,310",
+    "Receipt No.:5792 Date: 20/02/2026 Leave and Licenses Agreement Registration Fee: 500.00 "
+    "Stamp duty of Rs.10912.00/- is paid",
+    "Tax Invoice  Total Value of Supply in Rupees  Total SGST Payable  Engine No. N4H22ZAJ0529  "
+    "L&T491 Mini Tandem Compactor  12,00,000",
+]
+
+
+@pytest.mark.parametrize("text", NOT_PROOF_PAGES)
+def test_documents_that_carry_money_and_dates_but_prove_no_work(text):
+    assert NOT_WORK_PROOF.search(text), f"not vetoed: {text[:60]!r}"
+
+
+VALUE_ROLES = [
+    ("Work Done Amount", "value_done"),
+    ("Gross amount of final bill", "value_done"),
+    ("Accepted tender Amount", "value_contract"),
+    ("Cost of work", "value_contract"),
+    ("Administration Approval", "value_other"),     # a sanction, not what was built
+    ("Estimated Cost", "value_other"),
+    ("Actual date of completion", "date_actual"),
+    ("Stipulated date of completion", "date_stipulated"),
+    ("Date of work starting", "date_started"),
+    ("Name of work", "description"),
+]
+
+
+@pytest.mark.parametrize("label,role", VALUE_ROLES)
+def test_column_headings_are_understood_by_what_they_say(label, role):
+    """A completion certificate carries three different amounts. Which one is the value of the work
+    is decided by its own label, not by which came first on the page."""
+    assert _role_of(label) == role
+
+
+COLLIDED = "18,0 6 , 7 3 , 3 7 , 1 5 3 1 8 , 0 3 , 3 4 , 1 8 1 3 . 0 3 . 2 0 2"
+
+
+def test_collided_columns_state_no_amount_anybody_can_defend():
+    """Three columns printed into one cell. Any figure recovered here would be invented."""
+    from app.services.work_proof import _amounts
+    assert all(v <= 100_000_000_000 for v in _amounts(COLLIDED))
+    assert 180 not in _amounts(COLLIDED), "a truncated fragment was returned as an amount"

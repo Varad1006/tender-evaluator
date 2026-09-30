@@ -286,7 +286,11 @@ def _similar_works_any(spec: CriterionSpec, claims: list[Claim], requirement_quo
         if c.value_numeric is None:
             continue
         year = c.detail.get("year")
-        if earliest is not None and year is not None and year < earliest:
+        # A completion column that says only "March -25" gives a year by inference, not by
+        # statement. Excluding a work on an inferred year would reject real experience over a
+        # two-digit abbreviation, so only a year read in full can put a work outside the window.
+        if (earliest is not None and year is not None and year < earliest
+                and c.detail.get("year_certain", True)):
             rejected.append(f"{format_inr_short(c.value_numeric)} completed {year}, before the {window}-year window")
             continue
         esc = indexation.escalate(c.value_numeric, year, table)

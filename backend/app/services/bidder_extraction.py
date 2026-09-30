@@ -242,6 +242,31 @@ def find_bid_capacity(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
     return out
 
 
+def find_completed_works_claims(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """The bidder's completed works, for the tender's "3 of these, or 2 of those" ladder.
+
+    The nature of work the tender asks for is carried in on the criterion, so the description each
+    record was read from can be matched against it here and judged properly in the verdict engine.
+    """
+    from app.services.criteria_extraction import GENERIC_NATURE_WORDS
+    from app.services.work_proof import find_completed_works
+
+    nature = str(spec.params.get("nature") or "")
+    terms = [w for w in re.split(r"[^\w]+", nature.lower())
+             if len(w) > 2 and w not in GENERIC_NATURE_WORDS]
+    out: list[Claim] = []
+    for r in find_completed_works(doc):
+        hits = [t for t in terms if t in r.description.lower()]
+        s = Sentence(page=r.page, text=r.quote, section=r.shape, in_table=r.shape == "statement_table")
+        out.append(_claim(
+            spec.key, s, f"{format_inr_short(r.value)} ({r.year or 'year not stated'})", r.value,
+            year=r.year, year_certain=r.year_certain, nature_terms=terms, nature_hits=hits,
+            description=r.description, shape=r.shape, value_label=r.value_label,
+            other_amounts=r.other_amounts, issues=r.issues,
+        ))
+    return out
+
+
 def find_experience(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
     terms = spec.params.get("nature_terms", [])
     out = []
@@ -361,6 +386,8 @@ FINDERS: dict[str, Callable[[ParsedDocument, CriterionSpec], list[Claim]]] = {
     "avg_turnover": find_turnover,
     "pmc_max_turnover": find_turnover_series,
     "pmc_bid_capacity": find_bid_capacity,
+    "pmc_similar_works": find_completed_works_claims,
+    "min_similar_projects": find_completed_works_claims,
     "similar_experience": find_experience,
     "gst_registration": find_gst,
     "epf_esic_registration": find_labour_registrations,
