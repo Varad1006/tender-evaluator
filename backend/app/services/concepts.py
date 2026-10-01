@@ -45,6 +45,27 @@ def _rx(*alts: str) -> re.Pattern:
     return re.compile("|".join(alts), re.IGNORECASE)
 
 
+_DEVA = re.compile(r"[ऀ-ॿ]")
+_LATN = re.compile(r"[A-Za-z]")
+
+
+def script_of(text: str) -> str:
+    """"deva", "latin" or "mixed" — which alphabet a span is written in.
+
+    A tender and the bids answering it are routinely in different languages: a Marathi PMC works
+    tender is answered by bids whose certificates, invoices and balance sheets are in English, and
+    an English RFP draws bids with Marathi completion certificates stapled into them. Comparing the
+    requirement's own words against the evidence page is meaningless when the two are not even in
+    the same alphabet, so the matching has to know.
+    """
+    deva, latin = len(_DEVA.findall(text or "")), len(_LATN.findall(text or ""))
+    if deva and latin:
+        ratio = deva / (deva + latin)
+        if 0.15 < ratio < 0.85:
+            return "mixed"
+    return "deva" if deva > latin else "latin"
+
+
 # Every bid opens with a checklist of what it contains, and the tender closes with the same list.
 # Those rows name each concept precisely — "Copy of the audited total turnover, net-worth and
 # Profit & Loss for financial years 2022-23, 2023-24 and 2024-25 ... Page No.80-89" — next to
@@ -156,7 +177,9 @@ TURNOVER = Concept(
         r"\bcontract\s+receipts?\b",
         r"\bbusiness\s+receipts?\b",
         r"\bsales?\s+and\s+services?\b",
-        r"उलाढाल",  # Marathi: turnover
+        # Marathi. "मागील ५ वर्षातील कंत्राटदाराची कामाची उलाढाल", "चार्टर्ड अकाउंटंट प्रमाणित
+        # केलेली निविदाधारकाची मागील पाच वर्षातील आर्थिक उलाढाल".
+        r"उलाढाल", r"आर्थिक\s*उलाढाल", r"वार्षिक\s*उलाढाल", r"कामाची\s*उलाढाल",
     ),
     supports=_rx(
         r"\brevenue\s+from\s+operations?\b",
@@ -185,6 +208,7 @@ TURNOVER = Concept(
     ),
     requirement_cues=_rx(
         r"\bturn\s?-?\s?overs?\b", r"\bgross\s+receipts?\b", r"average\s+annual\s+(?:financial\s+)?turnover",
+        r"उलाढाल",
     ),
 )
 
@@ -205,6 +229,7 @@ NET_WORTH = Concept(
         r"\bnet\s+assets?\b",
         r"\bowners?\s*'?\s*funds?\b",
         r"\bproprietor'?s?\s+(?:capital|funds?)\b",
+        r"निव्वळ\s*(?:मालमत्ता|संपत्ती|मूल्य)", r"नक्त\s*मालमत्ता",
     ),
     supports=_rx(
         r"\bshareholders?\s*'?\s*funds?\b",
@@ -229,7 +254,8 @@ NET_WORTH = Concept(
         ("total assets", "total liabilities"),
         ("share capital", "reserves and surplus"),
     ),
-    requirement_cues=_rx(r"\bnet\s*-?\s*worth\b", r"\bnetworth\b", r"positive\s+net\s*-?\s*worth"),
+    requirement_cues=_rx(r"\bnet\s*-?\s*worth\b", r"\bnetworth\b", r"positive\s+net\s*-?\s*worth",
+                         r"निव्वळ\s*(?:मालमत्ता|संपत्ती|मूल्य)"),
 )
 
 PROFIT = Concept(
@@ -249,6 +275,7 @@ SOLVENCY = Concept(
         r"\bsolvenc(?:y|ies)\b",
         r"\bsolvent\s+(?:to|for|up\s+to)\b",
         r"\bfinancial\s+standing\b",
+        r"आर्थिक\s*पत", r"पतदर्शक", r"सॉल्व्हन्सी",
     ),
     supports=_rx(
         r"\bbanker'?s?\s+certificate\b",
@@ -286,6 +313,10 @@ STAFF_STRENGTH = Concept(
         r"\btechnical(?:ly)?\s+(?:qualified\s+)?(?:professionals?|personnel|staff|manpower)\b",
         r"\bkey\s+personnel\b",
         r"\btechnical\s+persons?\b",
+        # The Marathi personnel statement's own column headings (PMC works tender, Statement IV):
+        # "अ.क्र. | नाव | शैक्षणिक अर्हता | कामाचा अनुभव | निविदाधारकाकडे कार्यरत कालावधी".
+        r"तांत्रिक\s*(?:कर्मचारी|कर्मचा|मनुष्यबळ|व्यक्ती)", r"मनुष्यबळ",
+        r"शैक्षणिक\s*(?:अर्हता|पात्रता)", r"कर्मचारी\s*संख्या",
     ),
     supports=_rx(
         r"\bemployees?\b", r"\bprofessionals?\b", r"\bengineers?\s+(?:employed|available|on)\b",
@@ -315,6 +346,7 @@ STAFF_STRENGTH = Concept(
         r"\bIT\s+professionals?\b", r"\bon\s*-?\s*roll\b", r"\bstaff\s+strength\b",
         r"\btechnical\s+manpower\b", r"\bmanpower\b", r"\bkey\s+personnel\b",
         r"\btechnical\s+(?:staff|personnel)\b",
+        r"मनुष्यबळ", r"तांत्रिक\s*कर्मचारी", r"शैक्षणिक\s*(?:अर्हता|पात्रता)",
     ),
     datatype="count",
     roster=True,
@@ -327,11 +359,15 @@ STAFF_STRENGTH = Concept(
 QUALITY_CERT = Concept(
     key="quality_certification",
     label="Quality certification",
-    anchors=_rx(r"\bISO\s*[/:]?\s*(?:IEC\s*)?\d{4,5}", r"\bCMMI\b", r"\bcapability\s+maturity\b"),
+    anchors=_rx(r"\bISO\s*[/:]?\s*(?:IEC\s*)?\d{4,5}", r"\bCMMI\b", r"\bcapability\s+maturity\b",
+        r"आय\.?एस\.?ओ",
+    ),
     supports=_rx(r"\bquality\s+management\s+system\b", r"\bcertificate\s+of\s+registration\b"),
     vetoes=_rx(r"\bshall\s+(?:submit|obtain|furnish)\b", r"\bis\s+required\s+to\s+(?:have|possess)\b"),
     documents=_rx(r"ISO\s*\d{4,5}", r"quality\s+management"),
-    requirement_cues=_rx(r"\bISO\b", r"\bCMMI\b", r"quality\s+certificat"),
+    requirement_cues=_rx(r"\bISO\b", r"\bCMMI\b", r"quality\s+certificat",
+        r"आय\.?एस\.?ओ",
+    ),
     datatype="boolean",
 )
 
@@ -342,6 +378,9 @@ NON_BLACKLIST = Concept(
         r"\bnot\s+been\s+(?:black\s*-?\s*listed|blacklisted|debarred|banned)\b",
         r"\banti\s*-?\s*black\s*-?\s*listing\b",
         r"\bnon\s*-?\s*black\s*-?\s*listing\b",
+    
+        r"काळ्या\s*यादी",
+        r"काळी\s*यादी",
     ),
     supports=_rx(r"\bblack\s*-?\s*list", r"\bdebarr", r"\bbanned\b"),
     # A MahaTender receipt page prints "Debarred/Revoked Details" as a portal heading
@@ -352,7 +391,9 @@ NON_BLACKLIST = Concept(
         r"grounds\s+for\s+(?:the\s+)?annulment",
     ),
     documents=_rx(r"anti\s*-?\s*black", r"non\s*-?\s*black", r"declaration.{0,30}black"),
-    requirement_cues=_rx(r"black\s*-?\s*list", r"\bdebarr", r"non\s*-?\s*blacklisting"),
+    requirement_cues=_rx(r"black\s*-?\s*list", r"\bdebarr", r"non\s*-?\s*blacklisting",
+        r"काळ्या\s*यादी",
+    ),
     datatype="boolean",
     negations=None,
 )
@@ -372,11 +413,19 @@ LEGAL_ENTITY = Concept(
         r"\bpartnership\s+deed\b",
         r"\bLLP\s*I?N\b",
         r"\budyam\s+registration\b",
+    
+        r"नोंदणी\s*प्रमाणपत्र",
+        r"नोंदणीकृत",
+        r"भागीदारी\s*संस्था",
+        r"पूर्वनोंदणी",
     ),
     supports=_rx(r"\bcompanies\s+act\b", r"\bLLP\s+act\b", r"\bregistrar\s+of\s+companies\b"),
     vetoes=_rx(r"should\s+be\s+an\s+entity\s+registered", r"sub\s*-?\s*contracting"),
     documents=_rx(r"incorporation", r"registration\s+certificate", r"partnership\s+deed"),
-    requirement_cues=_rx(r"legal\s+entity", r"incorporat", r"registered\s+in\s+india"),
+    requirement_cues=_rx(r"legal\s+entity", r"incorporat", r"registered\s+in\s+india",
+        r"नोंदणी",
+        r"नोंदणीकृत",
+    ),
     datatype="boolean",
 )
 
@@ -395,12 +444,16 @@ def resolve(requirement_text: str, *, label: str = "", datatype: str = "") -> Co
     tender printed it. `label` is searched too: an extracted criterion often carries the clause's
     heading ("Manpower Declaration") where the body carries the measurement.
     """
-    text = f"{label}\n{requirement_text}"
     scored: list[tuple[int, Concept]] = []
     for concept in ALL:
         if concept.requirement_cues is None:
             continue
-        hits = len(set(m.group(0).lower() for m in concept.requirement_cues.finditer(text)))
+        in_body = len(set(m.group(0).lower() for m in concept.requirement_cues.finditer(requirement_text)))
+        # The clause's own heading names the requirement; its body says everything around it. A row
+        # reading "Power of Attorney" inside a clause that also mentions a registration certificate
+        # is about the power of attorney, so the heading is worth more than a mention further down.
+        in_label = len(set(m.group(0).lower() for m in concept.requirement_cues.finditer(label or "")))
+        hits = in_body + 2 * in_label
         if hits:
             # A count requirement and a currency requirement can share vocabulary ("manpower
             # strength 20" vs "turnover of 4 Cr"); the datatype the tender assigned breaks the tie.
@@ -447,10 +500,16 @@ MSME = Concept(
     key="msme_udyam",
     label="MSME / Udyam registration",
     identifier=re.compile(r"\bUDYAM\s*-\s*[A-Z]{2}\s*-\s*\d{2}\s*-\s*\d{5,8}\b", re.IGNORECASE),
-    anchors=_rx(r"udyam\s+registration", r"\bMSME\b", r"micro,?\s*small"),
+    anchors=_rx(r"udyam\s+registration", r"\bMSME\b", r"micro,?\s*small",
+        r"उद्यम\s*नोंदणी",
+        r"सूक्ष्म.{0,12}लघु",
+    ),
     supports=_rx(r"type\s+of\s+enterprise", r"\bDIC\b", r"MSME\s*-?\s*DFO"),
     documents=_rx(r"udyam\s+registration\s+certificate", r"\bMSME\b\s+certificate"),
-    requirement_cues=_rx(r"\bMSME\b", r"\budyam\b", r"micro,?\s*small\s+and\s+medium"),
+    requirement_cues=_rx(r"\bMSME\b", r"\budyam\b", r"micro,?\s*small\s+and\s+medium",
+        r"उद्यम",
+        r"सूक्ष्म",
+    ),
     datatype="boolean",
 )
 
@@ -491,6 +550,10 @@ SIGNING_AUTHORITY = Concept(
         r"\bRESOLVED\s+(?:FURTHER\s+)?THAT\b",
         r"extract\s+of\s+the\s+(?:minutes|resolution)",
         r"attorney\s+holder", r"मुखत्यार",
+    
+        r"पॉवर\s*ऑफ\s*अॅ?टर्नी",
+        r"मुखत्यारपत्र",
+        r"अधिकारपत्र",
     ),
     supports=_rx(r"authori[sz]ed\s+signator", r"duly\s+authori[sz]ed", r"on\s+behalf\s+of\s+the\s+(?:company|firm)"),
     vetoes=_rx(
@@ -500,7 +563,10 @@ SIGNING_AUTHORITY = Concept(
     ),
     documents=_rx(r"power\s+of\s+attorney", r"board\s+resolution"),
     requirement_cues=_rx(r"power\s+of\s+attorney", r"board\s+resolution", r"authori[sz]ed\s+signatory",
-                         r"authori[sz]ing\s+the\s+signatory"),
+                         r"authori[sz]ing\s+the\s+signatory",
+        r"पॉवर\s*ऑफ\s*अॅ?टर्नी",
+        r"मुखत्यार",
+    ),
     datatype="boolean",
 )
 
@@ -603,12 +669,21 @@ AUDITED_ACCOUNTS = Concept(
         r"balance\s+sheet", r"profit\s+(?:and|&)\s+loss\s+(?:account|statement|a/c)",
         r"audited\s+(?:financial\s+)?statements?", r"auditor'?s?\s+report",
         r"\bschedules?\s+to\s+the\s+(?:accounts|balance)",
+    
+        r"ताळेबंद",
+        r"लेखापरीक्षित",
+        r"नफा\s*(?:व|आणि)?\s*तोटा",
+        r"सनदी\s*लेखापाल",
+        r"चार्टर्ड\s*अकाउंटंट",
     ),
     supports=_rx(r"\bas\s+at\s+31(?:st)?[./-]\s*(?:03|march)", r"\bnotes?\s+to\s+(?:the\s+)?accounts",
                  r"chartered\s+accountants?", r"\bUDIN\b"),
     documents=_rx(r"balance\s+sheet", r"profit\s+(?:and|&)\s+loss", r"audited"),
     requirement_cues=_rx(r"balance\s+sheet", r"profit\s+(?:and|&)\s+loss", r"audited\s+(?:financial|total)",
-                         r"audited\s+statements?"),
+                         r"audited\s+statements?",
+        r"ताळेबंद",
+        r"लेखापरीक्षित",
+    ),
     datatype="boolean",
 )
 
@@ -618,13 +693,18 @@ TENDER_FEE = Concept(
     key="tender_fee",
     label="Tender fee",
     anchors=_rx(r"tender\s+fee", r"bid\s+document\s+fee", r"tender\s+document\s+(?:fee|cost)",
-                r"(?:document|processing)\s+fee", r"निविदा\s*शु"),
+                r"(?:document|processing)\s+fee", r"निविदा\s*शु",
+        r"निविदा\s*(?:शुल्क|फी)",
+        r"निविदा\s*संच",
+    ),
     supports=_rx(r"fee\s+in\s*₹", r"payment\s+(?:status|reference)", r"transaction\s+(?:id|no)"),
     # The EMD is the other payment on the same receipt and must not be read as the fee.
     vetoes=_rx(r"earnest\s+money", r"\bE\.?M\.?D\.?\b", r"security\s+deposit"),
     documents=_rx(r"tender\s+fee", r"bid\s+document\s+fee", r"payment\s+(?:slip|receipt)"),
     requirement_cues=_rx(r"tender\s+fee", r"bid\s+document\s+fee", r"tender\s+document\s+cost",
-                         r"processing\s+fee"),
+                         r"processing\s+fee",
+        r"निविदा\s*(?:शुल्क|फी)",
+    ),
 )
 
 PROVIDENT_FUND = Concept(
@@ -632,10 +712,15 @@ PROVIDENT_FUND = Concept(
     label="EPF registration",
     identifier=re.compile(r"\b[A-Z]{2}[A-Z]{3}\d{7}\d{3}\b"),  # e.g. PUPUN1766515000
     anchors=_rx(r"employees'?\s+provident\s+fund", r"\bE\.?P\.?F\.?O?\b",
-                r"provident\s+fund\s+code", r"\bEPF\s*(?:&|and)\s*MP\s+act"),
+                r"provident\s+fund\s+code", r"\bEPF\s*(?:&|and)\s*MP\s+act",
+        r"भविष्य\s*निर्वाह\s*निधी",
+        r"भ\.?\s*नि\.?\s*नि",
+    ),
     supports=_rx(r"code\s+number", r"establishment\s+is\s+registered", r"epfindia"),
     documents=_rx(r"provident\s+fund", r"\bEPFO?\b"),
-    requirement_cues=_rx(r"\bEPF\b", r"provident\s+fund"),
+    requirement_cues=_rx(r"\bEPF\b", r"provident\s+fund",
+        r"भविष्य\s*निर्वाह",
+    ),
     datatype="boolean",
 )
 
@@ -671,7 +756,11 @@ WORK_ORDER = Concept(
     key="work_order",
     label="Work order / letter of award",
     anchors=_rx(r"work\s+order", r"letter\s+of\s+(?:award|acceptance|intent)", r"\bL\.?O\.?[AI]\.?\b",
-                r"signed\s+contract", r"purchase\s+order", r"कार्यादेश"),
+                r"signed\s+contract", r"purchase\s+order", r"कार्यादेश",
+        r"कार्यादेश",
+        r"कामाचा\s*आदेश",
+        r"कार्यारंभ\s*आदेश",
+    ),
     supports=_rx(r"work\s+order\s+no", r"agreement\s+no", r"awarded\s+to"),
     # A rate-analysis or measurement sheet quotes the work order it belongs to; it is not one.
     vetoes=_rx(
@@ -680,7 +769,9 @@ WORK_ORDER = Concept(
     ),
     documents=_rx(r"work\s+order", r"letter\s+of\s+award"),
     requirement_cues=_rx(r"work\s+order", r"letter\s+of\s+award", r"signed\s+contract",
-                         r"client\s+citation"),
+                         r"client\s+citation",
+        r"कार्यादेश",
+    ),
     datatype="boolean",
 )
 
@@ -691,12 +782,19 @@ COMPLETION_CERTIFICATE = Concept(
         r"(?:work\s+)?completion\s+certificate", r"certificate\s+of\s+completion",
         r"certificate\s+in\s+respect\s+of\s+work\s+executed",
         r"performance\s+certificate", r"पूर्णत्वाचा?\s*दाखला",
+    
+        r"पूर्णत्वाचा?\s*दाखला",
+        r"काम\s*पूर्ण\s*केल",
+        r"समाधानकारक",
     ),
     supports=_rx(r"performance\s+(?:and\s+\w+\s+)?of\s+the\s+contractor\s+is\s+satisfactor",
                  r"work\s+(?:is\s+)?completed", r"satisfactor(?:y|ily)\s+completed"),
     vetoes=_rx(r"shall\s+(?:be\s+)?(?:submit|furnish|produce)", r"on\s+completion\s+of\s+the\s+work\s+the"),
     documents=_rx(r"completion\s+certificate", r"performance\s+certificate"),
-    requirement_cues=_rx(r"completion\s+certificate", r"client\s+completion", r"performance\s+certificate"),
+    requirement_cues=_rx(r"completion\s+certificate", r"client\s+completion", r"performance\s+certificate",
+        r"पूर्णत्व",
+        r"काम\s*पूर्ण",
+    ),
     datatype="boolean",
 )
 
@@ -712,16 +810,30 @@ KEY_ROLES = Concept(
         r"database\s+administrator", r"\bDBA\b", r"business\s+analyst",
         r"(?:UI\s*/?\s*UX|graphic)\s+designer", r"quality\s+(?:analyst|assurance)\s+(?:lead|engineer)",
         r"site\s+engineer", r"resident\s+engineer",
+    
+        r"अभियंता",
+        r"प्रकल्प\s*व्यवस्थापक",
+        r"स्थापत्य\s*अभियंता",
     ),
     supports=_rx(r"educational\s+qualification", r"years?\s+of\s+experience", r"\bdeputed?\b",
                  r"proposed\s+(?:team|personnel)"),
     vetoes=_rx(r"shall\s+(?:be\s+)?(?:deploy|depute|appoint|engage|provide)",
-               r"will\s+be\s+(?:deployed|appointed|engaged)"),
+               r"will\s+be\s+(?:deployed|appointed|engaged)",
+               # Every PMC certificate is signed by one of these, and a works tender names them on
+               # page after page. "अधीक्षक अभियंता (यांत्रिकी) यांच्या योग्यता प्रमाणपत्राची
+               # आवश्यकता" is about the officer who issues a certificate, not about the bidder's
+               # engineers; counting him as proposed personnel staffs the bid from the municipality.
+               r"(?:अधीक्षक|कार्यकारी|उप|शाखा|सहाय्?यक|उपअ?)\s*अभियंता",
+               r"महापालिका|आयुक्त|खानेप्रमुख|कार्यालयाचा",
+               r"(?:superintending|executive|deputy|assistant)\s+engineer"),
     documents=_rx(r"curriculum\s+vitae", r"\bC\.?V\.?\s+of\b", r"key\s+(?:professionals|personnel)",
                   r"proposed\s+team"),
     requirement_cues=_rx(r"\bCV\b", r"curriculum\s+vitae", r"key\s+(?:professionals|personnel)",
                          r"project\s+(?:manager|lead)", r"solution\s+architect",
-                         r"database\s+administrator", r"designer", r"profile\s+total\s+marks"),
+                         r"database\s+administrator", r"designer", r"profile\s+total\s+marks",
+        r"अभियंता",
+        r"प्रकल्प\s*व्यवस्थापक",
+    ),
     datatype="boolean",
 )
 
@@ -732,6 +844,10 @@ MACHINERY = Concept(
         r"plant\s+(?:and|&)\s+machinery", r"machinery\s+(?:owned|available|held)",
         r"(?:list|details)\s+of\s+(?:plant|machinery|equipment)",
         r"equipment\s+(?:owned|available|held)", r"यंत्रसामग्री",
+    
+        r"यंत्रसामग्री",
+        r"यंत्रे",
+        r"अवजारे",
     ),
     supports=_rx(r"\bJCB\b", r"\bexcavator", r"\btipper", r"\broller\b", r"\btractor\b",
                  r"registration\s+(?:no|number).{0,20}vehicle", r"\bRC\s+book\b"),
@@ -741,7 +857,10 @@ MACHINERY = Concept(
         r"livelink", r"\bpolicy\s+(?:no|period)\b", r"extra\s+item",
     ),
     documents=_rx(r"plant\s+(?:and|&)\s+machinery", r"list\s+of\s+machinery", r"machinery\s+statement"),
-    requirement_cues=_rx(r"plant\s+(?:and|&)\s+machinery", r"machinery", r"equipment\s+(?:owned|required)"),
+    requirement_cues=_rx(r"plant\s+(?:and|&)\s+machinery", r"machinery", r"equipment\s+(?:owned|required)",
+        r"यंत्रसामग्री",
+        r"यंत्रे",
+    ),
     datatype="boolean",
 )
 
@@ -802,12 +921,19 @@ BIDDER_PARTICULARS = Concept(
         r"correspondence\s+address",
         r"particulars\s+of\s+(?:the\s+)?(?:bidder|firm)",
         r"constitution\s+of\s+(?:the\s+)?(?:firm|bidder)",
+    
+        r"निविदाधारकाचे\s*नाव",
+        r"ठेकेदाराचे\s*नाव",
+        r"संपर्क\s*क्रमांक",
     ),
     supports=_rx(r"\bdesignation\b", r"mobile\s*(?:no|number)", r"\bfax\b", r"\be\s*-?\s*mail\b"),
     documents=_rx(r"details\s+of\s+(?:the\s+)?bidder", r"bidder'?s?\s+profile", r"appendix\s*-?\s*\d"),
     requirement_cues=_rx(r"details\s+of\s+(?:the\s+)?bidder", r"registered\s+office",
                          r"contact\s+person", r"correspondence\s+address",
-                         r"constitution\s+of\s+(?:the\s+)?firm"),
+                         r"constitution\s+of\s+(?:the\s+)?firm",
+        r"निविदाधारकाचे\s*नाव",
+        r"ठेकेदाराचे\s*नाव",
+    ),
     datatype="boolean",
 )
 
@@ -828,6 +954,13 @@ PROJECT_EXPERIENCE = Concept(
         r"(?:similar|comparable)\s+(?:works?|assignments?|projects?)\s+(?:executed|completed|carried)",
         r"works?\s+(?:executed|completed)\s+(?:during|in)\s+(?:the\s+)?last",
         r"details\s+for\s+work\s+undertaken",
+    
+        r"समकक्ष\s*काम",
+        r"तत्सम\s*काम",
+        r"त्याच\s*स्वरूपाच्या",
+        r"तुल्यबळ",
+        r"पूर्ण\s*केलेल्या\s*काम",
+        r"कामाचा\s*अनुभव",
     ),
     supports=_rx(r"name\s+of\s+(?:the\s+)?(?:work|project|client)", r"agreement\s+(?:no|amount)",
                  r"date\s+of\s+(?:commencement|completion)", r"\bSTATEMENT\s*(?:NO\.?)?\s*[-–]?\s*(?:II|III)\b"),
@@ -835,7 +968,11 @@ PROJECT_EXPERIENCE = Concept(
     documents=_rx(r"experience", r"client\s+citation", r"list\s+of\s+works?", r"similar\s+works?"),
     requirement_cues=_rx(r"experience", r"client\s+citation", r"completed\s*/?\s*on\s*-?\s*going",
                          r"assignments?\s+of\s+similar", r"past\s+experience",
-                         r"work\s+undertaken"),
+                         r"work\s+undertaken",
+        r"अनुभव",
+        r"समकक्ष",
+        r"तत्सम",
+    ),
     datatype="boolean",
 )
 

@@ -175,8 +175,14 @@ def _exists(spec: CriterionSpec, claims: list[Claim]) -> VerdictResult:
             reason=f"Pages of the right kind were found ({claims[0].value.lower()}, "
                    f"p{claims[0].page}), but none of them names what this criterion asks for. "
                    "Shown as unknown rather than a pass, for an evaluator to confirm.")
+    first = claims[0]
+    # A committee reading a Marathi requirement answered by an English certificate should be told
+    # that is what happened, so they can see why the words on the page do not look like the clause.
+    note = (" The tender states this requirement in a different language from the page it was found "
+            "on; they were matched on what the clause is about, not on its wording."
+            if first.detail.get("cross_language") else "")
     return VerdictResult(spec.key, "pass", "deterministic", evidence=claims[:1], computation="Document present",
-                         reason=f"Evidence located: {claims[0].value}.")
+                         reason=f"Evidence located: {first.value}.{note}")
 
 
 def _exists_all(spec: CriterionSpec, claims: list[Claim]) -> VerdictResult:

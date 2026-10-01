@@ -872,6 +872,16 @@ new one two four five all our ours company companies firm firms agency agencies 
 """.split())
 
 
+# Marathi procurement filler: the words every clause contains, which therefore separate none of
+# them. "निविदाधारकाने वैध नोंदणी प्रमाणपत्र सादर करणे आवश्यक आहे" is almost entirely made of these.
+_MR_UNDISTINCTIVE = frozenset("""
+आहे आणि व या चे ची चा चे साठी करणे सादर करावी करावे कराव्या लागेल राहील आवश्यक असणे अनिवार्य
+निविदा निविदेसोबत निविदाधारक निविदाधारकाने निविदाधारकाची कंत्राटदार कंत्राटदाराने ठेकेदार ठेकेदाराने
+प्रमाणपत्र दाखला कागदपत्रे प्रत प्रती यांनी यांचे तसेच सर्व इतर नुसार बाबत मध्ये वरील खालील
+सोबत जोडणे जोडलेली असल्यास केलेल्या केले अथवा किंवा तथापि मात्र
+""".split())
+
+
 def _distinctive(spec: CriterionSpec) -> set[str]:
     """The words that make this requirement a different requirement from its neighbours.
 
@@ -881,12 +891,23 @@ def _distinctive(spec: CriterionSpec) -> set[str]:
     Designer" was cited as evidence of a Database Administrator, and a GST undertaking as evidence
     of solvency — each a pass on a page that does not say what the committee would be told it says.
     """
-    raw = re.findall(r"[A-Za-z][A-Za-z\-]{2,}", f"{spec.label} {spec.requirement}".lower())
+    text = f"{spec.label} {spec.requirement}".lower()
     words: set[str] = set()
-    for w in raw:
+    for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", text):
         # "Anti-Collusion" has to compare equal to a page that writes "Anti Collusion".
         words.update([w] + [part for part in w.split("-") if len(part) >= 3])
-    return {w for w in words if w not in _UNDISTINCTIVE and len(w) >= 3}
+    words = {w for w in words if w not in _UNDISTINCTIVE and len(w) >= 3}
+    # The same test in Devanagari. Without it a Marathi clause yields no distinctive words at all,
+    # the gate is skipped, and a Marathi requirement gets no instance-level precision even against
+    # a Marathi bid — "Project Lead" and "Database Administrator" become indistinguishable again.
+    # Marathi inflects, so a word is kept with its stem as well as whole.
+    for w in re.findall(r"[ऀ-ॿ]{3,}", text):
+        if w in _MR_UNDISTINCTIVE:
+            continue
+        words.add(w)
+        if len(w) > 4:
+            words.add(w[:4])
+    return words
 
 
 def find_concept_presence(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
@@ -908,13 +929,22 @@ def find_concept_presence(doc: ParsedDocument, spec: CriterionSpec) -> list[Clai
     if concept is None:
         return find_generic_document(doc, spec)
 
+    from app.services.concepts import script_of
+
     terms = _distinctive(spec)
+    requirement_script = script_of(f"{spec.label} {spec.requirement}")
     contents = {p.number for p in doc.pages if _is_contents_page(p)}
+    page_script = {pg.number: script_of(pg.text or "") for pg in doc.pages}
     page_words = {}
     for pg in doc.pages:
         found: set[str] = set()
-        for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", (pg.text or "").lower()):
+        low = (pg.text or "").lower()
+        for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", low):
             found.update([w] + [part for part in w.split("-") if len(part) >= 3])
+        for w in re.findall(r"[ऀ-ॿ]{3,}", low):
+            found.add(w)
+            if len(w) > 4:
+                found.add(w[:4])
         page_words[pg.number] = found
     # Three grades of evidence, and the citation shown is the best one found. The page a bid states a
     # fact on usually carries several lines of the right kind — a covering letter answers four
@@ -933,8 +963,22 @@ def find_concept_presence(doc: ParsedDocument, spec: CriterionSpec) -> list[Clai
             return
         seen.add(key)
         line_words: set[str] = set()
-        for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", text.lower()):
+        low = text.lower()
+        for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", low):
             line_words.update([w] + [part for part in w.split("-") if len(part) >= 3])
+        for w in re.findall(r"[ऀ-ॿ]{3,}", low):
+            line_words.add(w)
+            if len(w) > 4:
+                line_words.add(w[:4])
+        # A Marathi tender's words will never appear on an English certificate, and the reverse is
+        # just as common: a PMC works tender is written in Marathi and answered by bids whose
+        # balance sheets, GST certificates and work orders are in English. Across alphabets the
+        # distinctive-term test cannot run at all — applied anyway it rejects every page, and the
+        # criterion comes back unknown on a submission that answers it. The concept is the bridge
+        # that still holds, because it carries both vocabularies, so a concept match stands on its
+        # own and the claim records that this is why.
+        other_script = (requirement_script != page_script.get(page, "latin")
+                        and "mixed" not in (requirement_script, page_script.get(page, "latin")))
         if cue == "identifier" or not terms:
             # A number only one issuer can mint needs no corroborating word near it. Demoting the
             # GSTIN on the bidder's own GST certificate because the page never spells out "GST"
@@ -944,6 +988,8 @@ def find_concept_presence(doc: ParsedDocument, spec: CriterionSpec) -> list[Clai
             bucket = exact
         elif terms & page_words.get(page, set()):
             bucket = on_page
+        elif other_script:
+            bucket = on_page
         else:
             bucket = weak
         if len(bucket) >= 6:
@@ -951,7 +997,8 @@ def find_concept_presence(doc: ParsedDocument, spec: CriterionSpec) -> list[Clai
         s = Sentence(page=page, text=text.strip()[:400], section=section or concept.label)
         value = concept.label if cue != "identifier" else f"{concept.label} stated"
         bucket.append(_claim(spec.key, s, value, None, concept=concept.key, cue=cue,
-                             weak=bucket is weak))
+                             weak=bucket is weak,
+                             cross_language=other_script and bucket is on_page))
 
     for cue_wanted in ("identifier", "anchor"):
         for s in doc.sentences:

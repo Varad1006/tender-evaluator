@@ -26,7 +26,16 @@ from app.services.values import (
 
 log = logging.getLogger(__name__)
 
-REQUIRE = re.compile(r"\b(shall|must|mandatory|required|should)\b", re.IGNORECASE)
+# What makes a sentence a requirement rather than a description. Marathi states the obligation as a
+# verb ending rather than a modal — "सादर करणे आवश्यक आहे" (must be submitted), "भरावी लागेल" (shall
+# have to be paid), "बंधनकारक" (binding) — so there is no single word to look for and the stems are
+# matched instead. Without these every rule below refuses every Marathi sentence, which is why a
+# wholly Marathi tender produced no criteria at all.
+REQUIRE = re.compile(
+    r"\b(shall|must|mandatory|required|should)\b"
+    r"|आवश्यक|अनिवार्य|बंधनकारक|पाहिजे"
+    r"|कराव[ीेा]|लागेल|राहील|असणे\s*आवश्यक|सादर\s*कर|जोडणे|भरावी",
+    re.IGNORECASE)
 GENERIC_NATURE_WORDS = {
     "installation", "installations", "supply", "commissioning", "work", "works", "project", "projects",
     "similar", "nature", "of", "the", "and", "a", "an", "value", "system", "systems",
@@ -88,9 +97,14 @@ def _title(phrase: str) -> str:
 # Requirement rules: Sentence -> CriterionDraft | None
 # --------------------------------------------------------------------------------------
 
+_MR_TURNOVER = re.compile(r"उलाढाल")
+_MR_AVERAGE = re.compile(r"सरासरी")
+_MR_MAX = re.compile(r"जास्तीत\s*जास्त|कमाल")
+
+
 def rule_turnover(s: Sentence) -> CriterionDraft | None:
     t = s.text.lower()
-    if "turnover" not in t or not _required(s):
+    if ("turnover" not in t and not _MR_TURNOVER.search(s.text)) or not _required(s):
         return None
     amounts = parse_amounts(s.text)
     if not amounts:
@@ -100,7 +114,11 @@ def rule_turnover(s: Sentence) -> CriterionDraft | None:
         s.text, re.IGNORECASE,
     )
     years = _count(years_m.group(1)) if years_m else None
-    average = "average" in t
+    if years is None:
+        # "मागील ५ वर्षातील", "गेल्या ५ (पाच) वर्षातील" — the window as Marathi states it.
+        windows = parse_durations(s.text, unit="years")
+        years = windows[0].value if windows else None
+    average = "average" in t or bool(_MR_AVERAGE.search(s.text))
     label = "Minimum Average Annual Turnover" if average else "Minimum Annual Turnover"
     if years:
         label += f" (last {years} FY)"

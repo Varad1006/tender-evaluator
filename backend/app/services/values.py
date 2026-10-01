@@ -12,7 +12,11 @@ NUMBER_WORDS = {
 
 MULTIPLIERS = {"crore": 10_000_000, "crores": 10_000_000, "cr": 10_000_000,
                "lakh": 100_000, "lakhs": 100_000, "lac": 100_000, "lacs": 100_000,
-               "million": 1_000_000}
+               "million": 1_000_000,
+               # Marathi. A PMC works tender states its money in these and in Devanagari digits:
+               # "र.रु.१.५० कोटी", "रक्कम रुपये २५.०० लाख", "निविदाधीन रक्कमेच्या १%".
+               "कोटी": 10_000_000, "कोटि": 10_000_000,
+               "लाख": 100_000, "लक्ष": 100_000, "हजार": 1_000}
 
 # Bidder submissions are scans, and their text layers break Indian digit grouping in two ways.
 #
@@ -26,19 +30,32 @@ MULTIPLIERS = {"crore": 10_000_000, "crores": 10_000_000, "cr": 10_000_000,
 #                           which costs a lookup; guessing it costs a wrong verdict.
 _GROUPED = r"\d[\d,]*(?:\s*,\s*\d[\d,]*)*(?:\s*\.\d+)?"
 
+# "रु.", "र.रु.", "रुपये" and "₹" are the same marker as "Rs."; a Marathi tender uses them
+# interchangeably and often with no space before the figure ("र.रु.१.५० कोटी").
+# The optional "र." prefix has to require its stop: written as `र\.?` it eats the र of रु itself,
+# and "रु. १,२३,४५,६७८/-" then matches nothing at all.
+_MARKER = r"(?:rs\.?|inr|₹|(?:र\.\s*)?रुपये|(?:र\.\s*)?रु\.?)"
+_MULT = r"crores?|cr\b\.?|lakhs?|lacs?|million|कोटी|कोटि|लाख|लक्ष|हजार"
 _CURRENCY = re.compile(
-    r"(?:(?:rs\.?|inr|₹)\s*(?P<a>" + _GROUPED + r")(?:\s*/-)?\s*(?P<am>crores?|cr\b\.?|lakhs?|lacs?|million)?"
-    r"|(?P<b>" + _GROUPED + r")\s*(?P<bm>crores?|lakhs?|lacs?)\b)",
+    r"(?:" + _MARKER + r"\s*(?P<a>" + _GROUPED + r")(?:\s*/-)?\s*(?P<am>" + _MULT + r")?"
+    r"|(?P<b>" + _GROUPED + r")\s*(?P<bm>crores?|lakhs?|lacs?|कोटी|कोटि|लाख|लक्ष)\b)",
     re.IGNORECASE,
 )
 
 # A digit-shaped letter that continues the number the match just stopped on: the value is cut short.
 _TRUNCATED_BY_LETTER = re.compile(r"^\s*[,.]?\s*[OoIlSsZzBbGgq]\s*[\d,]")
 
+# Marathi inflects the unit rather than adding a separate word: वर्ष, वर्षे, वर्षात, वर्षातील,
+# वर्षांसाठी, वर्षांकरिता are all "years", so the unit is matched by its stem and whatever follows.
 _DURATION = re.compile(
-    r"\(?\b(?P<n>\d+|" + "|".join(NUMBER_WORDS) + r")\)?\s*(?:-\s*)?(?P<unit>years?|yrs?|days?|months?)\b",
+    r"\(?\b(?P<n>\d+|" + "|".join(NUMBER_WORDS) + r")\)?\s*(?:-\s*)?"
+    # "गेल्या ५ (पाच) वर्षातील", "5 (five) years": the figure is repeated in words in brackets.
+    r"(?:\([^)]{1,20}\)\s*)?"
+    r"(?P<unit>years?\b|yrs?\b|days?\b|months?\b|वर्ष\S*|वर्षां\S*|महिन\S*|महीन\S*|दिवस\S*)",
     re.IGNORECASE,
 )
+_MR_YEAR = re.compile(r"^(?:वर्ष|वर्षां)")
+_MR_MONTH = re.compile(r"^(?:महिन|महीन)")
 
 _YEAR = re.compile(r"\b(20[0-4]\d|19[89]\d)\b")
 
@@ -63,15 +80,30 @@ class Duration:
     raw: str
 
 
+_DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+
+
+def ascii_digits(text: str) -> str:
+    """Marathi documents print numbers in Devanagari digits ("१२,३४,५६७/-", "सन २०२४-२५"). Parse on
+    this copy; quote the original, which is what the page says."""
+    return (text or "").translate(_DEVANAGARI_DIGITS)
+
+
 def _scan_amounts(text: str) -> tuple[list[Amount], list[str]]:
-    """(amounts read, fragments refused as corrupt)."""
+    """(amounts read, fragments refused as corrupt).
+
+    Scanned on a copy with Devanagari digits folded to ASCII, and quoted from the original. The
+    translation is one character for one character, so every offset the scan reports is an offset
+    into the text the page actually prints — the committee is shown "१,२३,४५,६७८", not "1,23,45,678".
+    """
     out: list[Amount] = []
     refused: list[str] = []
-    for m in _CURRENCY.finditer(text):
+    scan = ascii_digits(text)
+    for m in _CURRENCY.finditer(scan):
         digits = m.group("a") or m.group("b")
         group = "a" if m.group("a") else "b"
         mult_word = (m.group("am") or m.group("bm") or "").lower().rstrip(".")
-        if _TRUNCATED_BY_LETTER.match(text[m.end(group): m.end(group) + 4]):
+        if _TRUNCATED_BY_LETTER.match(scan[m.end(group): m.end(group) + 4]):
             refused.append(text[m.start(): m.end(group) + 8].strip())
             continue
         # A bare "2,000 days" style number without a currency marker or multiplier is not money.
@@ -80,17 +112,8 @@ def _scan_amounts(text: str) -> tuple[list[Amount], list[str]]:
         except ValueError:
             continue
         multiplier = MULTIPLIERS.get(mult_word, 1)
-        out.append(Amount(value=number * multiplier, raw=m.group(0).strip()))
+        out.append(Amount(value=number * multiplier, raw=text[m.start(): m.end()].strip()))
     return out, refused
-
-
-_DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
-
-
-def ascii_digits(text: str) -> str:
-    """Marathi documents print numbers in Devanagari digits ("१२,३४,५६७/-", "सन २०२४-२५"). Parse on
-    this copy; quote the original, which is what the page says."""
-    return (text or "").translate(_DEVANAGARI_DIGITS)
 
 
 def parse_amounts(text: str) -> list[Amount]:
@@ -131,20 +154,31 @@ def corrupt_amounts(text: str) -> list[str]:
 
 
 def parse_durations(text: str, unit: str | None = None) -> list[Duration]:
+    """Scanned with Devanagari digits folded to ASCII; quoted from the original, as amounts are."""
     out = []
-    for m in _DURATION.finditer(text):
+    scan = ascii_digits(text)
+    for m in _DURATION.finditer(scan):
         n = m.group("n").lower()
         value = NUMBER_WORDS.get(n) if not n.isdigit() else int(n)
+        if value is None:
+            continue
         u = m.group("unit").lower()
-        norm = "years" if u.startswith(("year", "yr")) else "days" if u.startswith("day") else "months"
+        if u.startswith(("year", "yr")) or _MR_YEAR.match(u):
+            norm = "years"
+        elif u.startswith("day") or u.startswith("दिवस"):
+            norm = "days"
+        elif u.startswith("month") or _MR_MONTH.match(u):
+            norm = "months"
+        else:
+            continue
         if unit and norm != unit:
             continue
-        out.append(Duration(value=value, unit=norm, raw=m.group(0).strip()))
+        out.append(Duration(value=value, unit=norm, raw=text[m.start(): m.end()].strip()))
     return out
 
 
 def parse_years(text: str) -> list[int]:
-    return [int(y) for y in _YEAR.findall(text)]
+    return [int(y) for y in _YEAR.findall(ascii_digits(text))]
 
 
 def fy_start(y1: str | int, y2: str | int) -> int | None:
@@ -163,7 +197,7 @@ def fy_start(y1: str | int, y2: str | int) -> int | None:
 def parse_financial_years(text: str) -> list[int]:
     """Every financial-year start in the text, in order, ignoring pairs that are not consecutive."""
     out = []
-    for m in _FY.finditer(text):
+    for m in _FY.finditer(ascii_digits(text)):
         start = fy_start(m.group("y1"), m.group("y2"))
         if start is not None:
             out.append(start)

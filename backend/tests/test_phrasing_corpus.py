@@ -1135,3 +1135,195 @@ def test_an_identifier_is_self_proving():
                         _page(12, ["reconciled the Turnover declared in GST returns with the books"])],
                        [(6, "27AASCS9581M1Z5")])
     assert claims and claims[0].page == 6 and not claims[0].detail.get("weak")
+
+
+# ==============================================================================================
+# 17. Marathi, and tenders and bids that are not in the same language
+#
+# A PMC works tender is written in Marathi and answered by bids whose balance sheets, GST
+# certificates and work orders are in English; an English RFP draws bids with Marathi completion
+# certificates stapled into them. Both directions have to work, and the concept is what bridges
+# them because it is the only thing that carries both vocabularies.
+#
+# Every Marathi string below is verbatim from the PMC works corpus.
+# ==============================================================================================
+
+MARATHI_MONEY = [
+    ("र.रु.१.५० कोटी मर्यादितपर्यंतची कामे", 1_50_00_000.0),
+    ("रक्कम रुपये २५.०० लाख", 25_00_000.0),
+    ("रु. १,२३,४५,६७८/-", 1_23_45_678.0),
+    ("एकूण र.रु. ४,२१,८७३ मात्र", 4_21_873.0),
+]
+
+
+@pytest.mark.parametrize("text,want", MARATHI_MONEY)
+def test_marathi_money_is_read(text, want):
+    """Nothing above this parsed at all before: "रु." is not "Rs." to a pattern that only knows
+    "Rs.", and Devanagari digits are not digits to a pattern that only knows ASCII."""
+    from app.services.values import parse_amounts
+
+    amounts = parse_amounts(text)
+    assert amounts and amounts[0].value == want
+
+
+def test_a_marathi_amount_is_quoted_as_the_page_prints_it():
+    """The scan runs on a copy with the digits folded to ASCII; the quote comes out of the original,
+    so the committee is shown what the page says."""
+    from app.services.values import parse_amounts
+
+    assert parse_amounts("रु. १,२३,४५,६७८/-")[0].raw == "रु. १,२३,४५,६७८/-"
+
+
+MARATHI_DURATIONS = [
+    ("मागील ५ वर्षातील जास्तीत जास्त", 5, "years"),
+    ("गेल्या ५ (पाच) वर्षातील", 5, "years"),       # the figure repeated in words, in brackets
+    ("कालावधी ६ महिने", 6, "months"),
+    ("१२ महिन्यांत पूर्ण", 12, "months"),
+    ("१० वर्षांनंतर प्रतिवर्षी", 10, "years"),
+]
+
+
+@pytest.mark.parametrize("text,value,unit", MARATHI_DURATIONS)
+def test_marathi_durations_are_read(text, value, unit):
+    """Marathi inflects the unit rather than adding a word: वर्ष, वर्षे, वर्षात, वर्षातील,
+    वर्षांनंतर are all "years"."""
+    from app.services.values import parse_durations
+
+    found = parse_durations(text, unit=unit)
+    assert found and found[0].value == value
+
+
+MARATHI_OBLIGATIONS = [
+    "निविदाधारकाने वैध नोंदणी प्रमाणपत्र सादर करणे आवश्यक आहे.",
+    "सदर रक्कम बयाणा रक्कम म्हणून भरावी लागेल.",
+    "कंत्राटदारास सर्व कागदपत्रे जोडणे बंधनकारक राहील.",
+    "ही अट सर्व निविदाधारकांना अनिवार्य आहे.",
+]
+
+
+@pytest.mark.parametrize("text", MARATHI_OBLIGATIONS)
+def test_a_marathi_sentence_can_state_an_obligation(text):
+    """Marathi states the obligation as a verb ending, not a modal — there is no word for "shall".
+    Until this was read, every rule refused every Marathi sentence and a wholly Marathi tender
+    produced no criteria at all."""
+    from app.adapters.pdf_parser import Sentence
+    from app.services.criteria_extraction import _required
+
+    assert _required(Sentence(page=1, text=text, section=""))
+
+
+def test_a_marathi_turnover_clause_becomes_a_criterion():
+    from app.adapters.pdf_parser import Sentence
+    from app.services.criteria_extraction import rule_turnover
+
+    clause = ("निविदाधारकाची मागील ५ (पाच) वर्षातील सरासरी वार्षिक आर्थिक उलाढाल "
+              "किमान र.रु.२५.०० लाख असणे आवश्यक आहे.")
+    draft = rule_turnover(Sentence(page=1, text=clause, section="पात्रता"))
+    assert draft is not None
+    assert draft.threshold_value == 25_00_000.0
+    assert draft.params["window_years"] == 5 and draft.params["average"] is True
+
+
+MARATHI_CONCEPT_LINES = [
+    ("turnover", "मागील ५ वर्षात, कंत्राटदाराची कामाची उलाढाल", "anchor"),
+    ("project_experience", "मागील ५ वर्षात, कंत्राटदाराने त्याच स्वरूपाच्या तुल्यबळ किंमतीच्या, "
+                           "पूर्ण केलेल्या कामाची किमान किंमत.", "anchor"),
+    ("project_experience", "समकक्ष कामांचा दाखला कार्यकारी अगर तत्सम पद धारण करणाऱ्या अधिका-याच्या "
+                           "स्वाक्षरीचा असावा", "anchor"),
+    ("legal_entity", "भारतातील कोणत्याही शासकीय/निमशासकीय संस्थेकडील वैध पूर्वनोंदणी प्रमाणपत्र "
+                     "आवश्यक आहे", "anchor"),
+    ("signing_authority", "(२) पॉवर ऑफ अटर्नी बाबतची स्पष्टीकरणे", "anchor"),
+    ("audited_accounts", "चार्टर्ड अकाउंटंट प्रमाणित केलेली निविदाधारकाची मागील पाच वर्षातील "
+                         "आर्थिक उलाढाल", "anchor"),
+    ("completion_certificate", "कंत्राटदाराने समाधानकारकरीत्या काम पूर्ण केले असल्याबाबत", "anchor"),
+    ("staff_strength", "अ.क्र. | नाव | शैक्षणिक अर्हता | कामाचा अनुभव | निविदाधारकाकडे कार्यरत कालावधी",
+     "anchor"),
+    # Every PMC certificate is signed by one of these. Counting the Superintending Engineer who
+    # issues a certificate as proposed personnel staffs the bid from the municipality.
+    ("key_roles", "अधीक्षक अभियंता (यांत्रिकी) यांच्या योग्यता प्रमाणपत्राची आवश्यकता नाही", None),
+    ("key_roles", "कार्यकारी अभियंता / खानेप्रमुख यांनी अभिलेखीत करावे", None),
+]
+
+
+@pytest.mark.parametrize("key,text,want", MARATHI_CONCEPT_LINES)
+def test_how_a_marathi_document_states_each_fact(key, text, want):
+    from app.services.concepts import BY_KEY
+
+    assert BY_KEY[key].hit(text) == want
+
+
+TWINS = [
+    ("मागील ५ वर्षातील जास्तीत जास्त वार्षिक उलाढाल", "maximum annual turnover over the last 5 years", "currency"),
+    ("त्याच स्वरूपाच्या पूर्ण केलेल्या कामाचा अनुभव", "experience of completed works of similar nature", "boolean"),
+    ("पॉवर ऑफ अटर्नी", "power of attorney", "boolean"),
+    ("निविदा शुल्क", "tender fee", "currency"),
+    ("ताळेबंद व नफा तोटा पत्रक", "balance sheet and profit & loss statement", "boolean"),
+    ("यंत्रसामग्रीची यादी", "list of machinery", "boolean"),
+    ("काळ्या यादीत नसल्याचे प्रतिज्ञापत्र", "undertaking of not being blacklisted", "boolean"),
+]
+
+
+@pytest.mark.parametrize("marathi,english,datatype", TWINS)
+def test_a_requirement_resolves_the_same_in_either_language(marathi, english, datatype):
+    from app.services.concepts import resolve
+
+    a, b = resolve(marathi, label=marathi, datatype=datatype), resolve(english, label=english, datatype=datatype)
+    assert a is not None and b is not None and a.key == b.key
+
+
+def test_the_clause_heading_outweighs_its_body():
+    """A row headed "Power of Attorney" inside a clause that also mentions a registration
+    certificate is about the power of attorney."""
+    from app.services.concepts import resolve
+
+    body = "निविदाधारकाने वैध नोंदणी प्रमाणपत्र व पॉवर ऑफ अटर्नी सादर करणे आवश्यक आहे."
+    assert resolve(body, label="पॉवर ऑफ अटर्नी", datatype="boolean").key == "signing_authority"
+    assert resolve(body, label="वैध नोंदणी प्रमाणपत्र", datatype="boolean").key == "legal_entity"
+
+
+def _bilingual_bid():
+    english = [_page(4, ["CERTIFICATE OF INCORPORATION", "U72900PN2013PTC146869"]),
+               _page(9, ["POWER OF ATTORNEY", "I, Amit Mohol, Director, do hereby appoint"])]
+    marathi = [_page(14, ["कामाचा पूर्णत्वाचा दाखला", "समाधानकारकरीत्या काम पूर्ण केले आहे"]),
+               _page(17, ["ताळेबंद व नफा तोटा पत्रक", "सनदी लेखापाल यांनी प्रमाणित केलेले"]),
+               _page(19, ["यंत्रसामग्रीची यादी", "१ जेसीबी २ टिप्पर ३ रोलर"])]
+    return _doc(english + marathi,
+                [(p.number, line) for p in english + marathi for line in p.lines])
+
+
+CROSS_LANGUAGE = [
+    ("पॉवर ऑफ अटर्नी", "निविदाधारकाने पॉवर ऑफ अटर्नी सादर करणे आवश्यक आहे.", 9),
+    ("वैध नोंदणी प्रमाणपत्र", "निविदाधारकाने वैध नोंदणी प्रमाणपत्र सादर करणे आवश्यक आहे.", 4),
+    ("Work completion certificate", "The bidder shall submit a work completion certificate.", 14),
+    ("Audited balance sheet", "The bidder shall submit an audited balance sheet.", 17),
+    ("List of plant and machinery", "The bidder shall submit a list of plant and machinery owned.", 19),
+    ("यंत्रसामग्रीची यादी", "निविदाधारकाने यंत्रसामग्रीची यादी सादर करणे आवश्यक आहे.", 19),
+]
+
+
+@pytest.mark.parametrize("label,requirement,page", CROSS_LANGUAGE)
+def test_a_requirement_finds_its_evidence_in_the_other_language(label, requirement, page):
+    """The distinctive-term test cannot run across alphabets — applied anyway it rejects every page
+    and the criterion comes back unknown on a submission that answers it. The concept still holds,
+    because it carries both vocabularies."""
+    from app.services.bidder_extraction import CriterionSpec, find_concept_presence
+    from app.services.evaluation import evaluate_criterion
+
+    spec = CriterionSpec(key="doc_x", label=label, operator="exists", params={}, requirement=requirement)
+    claims = find_concept_presence(_bilingual_bid(), spec)
+    assert claims, f"no evidence found for {label}"
+    assert claims[0].page == page
+    assert evaluate_criterion(spec, claims, requirement).verdict == "pass"
+
+
+def test_a_marathi_clause_still_has_distinctive_words_of_its_own():
+    """Extracting only Latin words left a Marathi clause with no distinctive terms at all, so the
+    precision gate was skipped entirely and every Marathi requirement matched every page of the
+    right kind."""
+    from app.services.bidder_extraction import CriterionSpec, _distinctive
+
+    spec = CriterionSpec(key="k", label="पॉवर ऑफ अटर्नी", operator="exists", params={},
+                         requirement="निविदाधारकाने पॉवर ऑफ अटर्नी सादर करणे आवश्यक आहे.")
+    terms = _distinctive(spec)
+    assert "पॉवर" in terms and "अटर्नी" in terms
+    assert "निविदाधारकाने" not in terms and "आवश्यक" not in terms   # filler every clause contains

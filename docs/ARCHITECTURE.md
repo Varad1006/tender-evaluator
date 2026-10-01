@@ -206,6 +206,50 @@ they were read in, so the same requirement arrives as `avg_turnover` on one tend
 `positive_net_worth` on another and `min_staff_strength` on a third. A registry keyed by name finds
 a finder for none of them on a tender nobody has seen yet.
 
+### Two languages, on either side
+
+A PMC works tender is written in Marathi and answered by bids whose balance sheets, GST certificates
+and work orders are in English; an English RFP draws bids with Marathi completion certificates
+stapled into them. Both directions occur, and both have to work.
+
+**The value layer reads Marathi.** `रु.`, `र.रु.` and `रुपये` are the same marker as `Rs.`, and
+`कोटी`/`लाख` the same multipliers as crore/lakh. Devanagari digits map one-for-one onto ASCII, so
+every scan runs on a folded copy while each quote is sliced out of the original — the committee is
+shown `रु. १,२३,४५,६७८/-`, not `1,23,45,678`. Durations are matched by stem because Marathi inflects
+the unit rather than adding a word (वर्ष, वर्षे, वर्षात, वर्षातील, वर्षांनंतर are all "years"), and the
+bracketed repetition Indian drafting favours — "गेल्या ५ (पाच) वर्षातील", "5 (five) years" — is
+allowed between the figure and its unit.
+
+**A Marathi sentence can state an obligation.** Marathi has no modal for "shall": the obligation is a
+verb ending — "सादर करणे आवश्यक आहे", "भरावी लागेल", "बंधनकारक". `REQUIRE` matched only English
+modals, so every rule refused every Marathi sentence and a wholly Marathi tender produced no criteria
+at all. 198 sentences in the works corpus read as obligations once the stems were added.
+
+**The concept is the bridge.** 18 of the 30 concepts now carry Marathi vocabulary alongside English,
+so a requirement resolves to the same concept whichever language states it:
+
+| the tender says | the bid says | concept |
+|---|---|---|
+| पॉवर ऑफ अटर्नी | POWER OF ATTORNEY | `signing_authority` |
+| Work completion certificate | कामाचा पूर्णत्वाचा दाखला | `completion_certificate` |
+| Audited balance sheet | ताळेबंद व नफा तोटा पत्रक | `audited_accounts` |
+| मागील ५ वर्षातील वार्षिक उलाढाल | Annual Turnover 2023-24 | `turnover` |
+
+**The precision gate stands down across alphabets.** The distinctive-term test compares the clause's
+own words against the evidence page; across scripts that comparison is meaningless, and applied
+anyway it rejects every page and returns `unknown` on a submission that answers the requirement. So
+when the requirement and the page are in different alphabets the concept match stands on its own, the
+claim records why, and the verdict tells the committee: *"The tender states this requirement in a
+different language from the page it was found on; they were matched on what the clause is about, not
+on its wording."* Within one alphabet the gate still applies in full — and it now extracts Devanagari
+terms too, since reading only Latin words left a Marathi clause with no distinctive terms and skipped
+the gate entirely.
+
+**One veto this made necessary.** Every PMC certificate is signed by an अधीक्षक / कार्यकारी / उप /
+शाखा अभियंता, and a works tender names them page after page. Read as personnel, the Superintending
+Engineer who *issues* a certificate becomes one of the bidder's proposed engineers — the bid staffed
+from the municipality.
+
 ### The concept list, and what it is not
 
 Thirty concepts, harvested from what five real RFPs ask for rather than imagined:
