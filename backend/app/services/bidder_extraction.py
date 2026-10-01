@@ -59,6 +59,9 @@ class CriterionSpec:
     threshold_value: float | None = None
     threshold_unit: str | None = None
     extraction_method: str = "deterministic"
+    # Tender facts the check needs beyond its own threshold: estimated cost, completion period,
+    # reference number (an EMD receipt must be for this tender; a bid capacity for its period).
+    tender: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -110,11 +113,15 @@ def find_turnover_series(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim
     # Most certificates state the series as a grid, where the year and the amount are in different
     # cells and the currency is only in the column header — so neither a sentence scan nor
     # `parse_amounts` sees a thing.
+    types = getattr(doc, "page_types", None) or []
     for page in sorted(pages):
         p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
         if p is None or not p.tables:
             continue
-        for yv in read_year_series(p.tables, want=TURNOVER_LABEL, avoid=DERIVED_LABEL):
+        # On the CA's turnover certificate itself every year-and-amount row is the turnover, whatever
+        # the column is called ("Total contract amount received") or if it is not called anything.
+        own = page - 1 < len(types) and types[page - 1] == "turnover_certificate"
+        for yv in read_year_series(p.tables, want=None if own else TURNOVER_LABEL, avoid=DERIVED_LABEL):
             if (yv.year, yv.value) in seen:
                 continue
             seen.add((yv.year, yv.value))
@@ -259,10 +266,11 @@ def find_completed_works_claims(doc: ParsedDocument, spec: CriterionSpec) -> lis
         hits = [t for t in terms if t in r.description.lower()]
         s = Sentence(page=r.page, text=r.quote, section=r.shape, in_table=r.shape == "statement_table")
         out.append(_claim(
-            spec.key, s, f"{format_inr_short(r.value)} ({r.year or 'year not stated'})", r.value,
-            year=r.year, year_certain=r.year_certain, nature_terms=terms, nature_hits=hits,
-            description=r.description, shape=r.shape, value_label=r.value_label,
-            other_amounts=r.other_amounts, issues=r.issues,
+            spec.key, s, f"{format_inr_short(r.value)} ({r.date or r.year or 'year not stated'})", r.value,
+            year=r.year, year_certain=r.year_certain, year_min=r.year_min, year_max=r.year_max, year_note=r.date,
+            nature_terms=terms, nature_hits=hits, description=r.description, shape=r.shape,
+            value_label=r.value_label, other_amounts=r.other_amounts, issues=r.issues,
+            contractor=r.contractor, foreign=r.foreign, tender_no=r.tender_no,
         ))
     return out
 
@@ -489,3 +497,8 @@ def extract_bidder(doc: ParsedDocument, specs: list[CriterionSpec], filename: st
             seen.add(k)
             unique.append(c)
     return BidderExtraction(bidder_name=find_bidder_name(doc, filename), claims=unique, warnings=warnings)
+
+
+# PMC works criteria read from a bid's documents (EMD receipt, registration, bid-capacity working,
+# firm constitution, executed quantities) register themselves into FINDERS when this module loads.
+import app.services.bidder_evidence  # noqa: E402,F401

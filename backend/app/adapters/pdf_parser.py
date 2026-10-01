@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -283,12 +284,23 @@ def _ink_ratio(page) -> float:
     return ink / max(1, len(pixels))
 
 
+# PDFium is not thread-safe: two threads inside it at once crash the whole process natively
+# ("Trace/BPT trap"), with no Python exception to catch. Tenders and bids are read on a worker pool,
+# so every call into it goes through this lock. At ~2 ms a page, serialising costs nothing visible.
+_PDFIUM = threading.RLock()
+
+
 def quick_scan(path: str | Path) -> list[PageScan]:
     """Tier-0 local pass with pdfium: text + readability + scan detection for every page.
 
     ~2 ms/page (the whole 1,100-page PMC corpus scans in 2.4 s), so it runs on every document
     and decides where the slower structural parse and the remote OCR tier are worth spending.
     """
+    with _PDFIUM:
+        return _quick_scan(path)
+
+
+def _quick_scan(path: str | Path) -> list[PageScan]:
     import pypdfium2 as pdfium
     import pypdfium2.raw as pdfium_raw
 

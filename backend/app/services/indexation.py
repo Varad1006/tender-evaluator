@@ -158,6 +158,50 @@ def parse_index_table(text: str, page: int, document_id: str | None = None,
                       document_id=document_id, doc_name=doc_name, consistent=consistent, notes=notes)
 
 
+# The rule in prose with no table beside it. PMC's tender-procedure circular says "उलाढाल, कामाची
+# किंमत इत्यादीची परिगणना चालू दराने करताना प्रतिवर्षी १०% वाढ विचारात घेण्यात येईल" — turnover, the
+# cost of works and so on, worked out at current rates, with a 10% increase for each year.
+_PROSE_RATE = re.compile(
+    r"प्रतिवर्षी\s*(?P<mr>[०-९\d]{1,2}(?:\.[०-९\d]+)?)\s*%\s*वाढ"
+    r"|(?:weightage|increase|escalation|enhancement)\s+of\s+(?P<en>\d{1,2}(?:\.\d+)?)\s*%\s*per\s*(?:year|annum)",
+    re.IGNORECASE)
+
+
+def table_from_stated_rule(docs, current_fy: int | None, years: int = 6) -> IndexTable | None:
+    """The factors a stated rate implies, for a tender that states the rate but prints no table.
+
+    The current price level is the tender's own financial year; each year back multiplies by
+    (1 + rate), exactly the progression a printed table must follow. Without the tender's year
+    there is no current level to escalate to, and nothing is applied.
+    """
+    from app.services.values import ascii_digits
+
+    if current_fy is None:
+        return None
+    for d in docs:
+        if d.parsed is None:
+            continue
+        for p in d.parsed.pages:
+            if p.quality.kind not in ("english", "ocr_en", "ocr_mr"):
+                continue
+            text = p.text or ""
+            m = _PROSE_RATE.search(text)
+            if not m:
+                continue
+            rate = float(ascii_digits(m.group("mr") or m.group("en"))) / 100
+            if not 0 < rate <= 0.25:
+                continue
+            start, end = text.rfind("\n", 0, m.start()) + 1, text.find("\n", m.end())
+            factors = {current_fy - k: round((1 + rate) ** k, 4) for k in range(1, years + 1)}
+            return IndexTable(
+                factors=factors, stated_rate=rate, implied_rate=rate, page=p.number,
+                quote=text[start:end if end != -1 else None].strip()[:300], document_id=d.document_id,
+                doc_name=d.name, consistent=True,
+                notes=[f"The tender states {rate:.0%} per year and prints no factors; they are computed from that "
+                       f"rate with FY {current_fy}-{str(current_fy + 1)[-2:]} as the current year."])
+    return None
+
+
 def find_index_tables(docs) -> list[IndexTable]:
     """Every multiplying-factor table in the bundle's readable pages, newest page first.
 

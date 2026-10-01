@@ -62,13 +62,43 @@ export interface PriceCitation {
   quote: string;
 }
 
+export interface BidContentsRange {
+  type: string;
+  label: string;
+  from: number;
+  to: number;
+}
+
+export interface BidderDocumentInfo {
+  id: string;
+  file_name: string;
+  origin: string | null;
+  doc_type: string;
+  page_count: number | null;
+  page_kinds: PageKind[];
+  page_types: (string | null)[];
+  contents: BidContentsRange[];
+  error: string | null;
+  ocr_pages: number;
+}
+
 export interface BidderSummary {
   id: string;
   name: string;
   status: 'Registered' | 'Extracting' | 'ClaimsReady' | 'Failed';
   error: string | null;
+  bid_ref: string | null;
   criteria_with_evidence: number;
   document: { id: string; file_name: string; page_count: number | null } | null;
+  documents: BidderDocumentInfo[];
+  identity: {
+    firm_name?: { value: string; page: number | null; document_id: string | null; guessed?: boolean };
+    constitution?: { value: string };
+    bid_date?: string;
+  };
+  warnings: string[];
+  ocr_status: TenderDetail['ocr_status'];
+  ocr_progress: { done?: number; total?: number; cached?: number; errors?: string[] };
   price: number | null;
   price_display: string | null;
   price_citation: PriceCitation | null;
@@ -161,7 +191,8 @@ export interface Issue {
 
 export interface EvaluatedBidder extends BidderSummary {
   overall: Standing;
-  counts: Record<Verdict, number>;
+  /** not_a_gate: non-pass verdicts on conditions that decide nothing (they are not issues). */
+  counts: Record<Verdict | 'not_a_gate', number>;
   issues: Issue[];
 }
 

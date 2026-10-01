@@ -37,7 +37,9 @@ export const api = {
   /** A tender is a bundle: notice + conditions PDFs, BOQ .xls, or the zip/rar MahaTender provides. */
   createTender: (files: File[]) => upload<{ id: string }>('/tenders', files, 'files'),
   deleteTender: (id: string) => request<{ id: string }>(`/tenders/${id}`, { method: 'DELETE' }),
-  addBidder: (tenderId: string, file: File) => upload<{ id: string }>(`/tenders/${tenderId}/bidders`, file),
+  /** A bid is a bundle too: the portal envelope (Fee_PreQual_Technical_<bid id>.zip) or its PDFs. */
+  addBidder: (tenderId: string, files: File | File[]) =>
+    upload<{ id: string }>(`/tenders/${tenderId}/bidders`, Array.isArray(files) ? files : [files], 'files'),
   deleteBidder: (id: string) => request<{ id: string }>(`/bidders/${id}`, { method: 'DELETE' }),
   evaluate: (tenderId: string) => request<Evaluation>(`/tenders/${tenderId}/evaluate`, { method: 'POST' }),
   comparison: (tenderId: string) => request<Evaluation>(`/tenders/${tenderId}/comparison`),

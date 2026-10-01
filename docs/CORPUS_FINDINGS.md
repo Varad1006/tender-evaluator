@@ -207,9 +207,105 @@ prefab hospital structures/units on turnkey basis". Its turnover criterion asks 
 tender is the requirement, however it got there, and a reader that quietly repaired either would be
 inventing a criterion.
 
+# What PMC's tender-procedure circular added
+
+Three PMC Zone-1 bundles (Oct 2026) carry only an item-wise abstract, the BOQ spreadsheet and the
+same 19-page scanned circular, "पुणे महानगरपालिका निविदा कार्यप्रणाली प्रपत्र". Everything that is
+eligibility comes from the circular, and the circular states rules rather than figures.
+
+## 30. A rule is not a figure, but it fixes one
+EMD is "1% of the tender amount up to ₹1.5 Cr; above, 0.5% or ₹1.5 lakh, whichever is more".
+With no amount printed anywhere, the EMD is worked out from that rule and the estimated cost, and
+says so ("the tender states the rule, not a figure"), so the committee confirms it against the
+portal. The amount is computed only when the page states the rule's tiers, never assumed.
+
+## 31. An escalation rule written as a sentence still governs
+"उलाढाल, कामाची किंमत इत्यादीची परिगणना चालू दराने करताना प्रतिवर्षी १०% वाढ" (turnover, cost of
+works and so on at current rates, 10% more for each year) has no factor table beside it. The
+factors are computed from the stated rate, with the tender's own financial year (from its
+reference, else the latest date its documents print) as the current price level. The Warje tender
+states the same sentence; its bids had been compared at face value until this was read.
+
+## 32. A mention is not a prohibition
+The circular names joint ventures twice: among entities that can be blacklisted, and among points
+on which a JV agreement's defects must be clarified. Both imply that JVs may bid. Only a
+prohibition ("निविदेत Joint Venture अनुज्ञेय राहणार नाही") makes "no joint venture" a criterion. The
+ground truth for one earlier tender had recorded the old reader's misreading; it is corrected.
+
+## 33. OCR renames a criterion; its formula survives
+"निविदा भरण्याची क्षमता (बीड कॅपॅसिटी)" came back from OCR as "मधमना (बीड कॉमिटी)", and elsewhere the
+word is spelt कंपेसिटी. The formula "(अ x एन x १.५) - बी" came through intact, and locates the
+criterion.
+
+## 34. Some bundles never state the completion period
+Turnover is 75% of the *annual* value of the work, and the annual value needs the period. When no
+document in the bundle prints it, the criterion is shown without a number and says why, rather
+than assuming twelve months.
+
+# What the first bid envelopes taught us
+
+Ten technical envelopes for one PMC works tender (1,470 pages), read page by page to write the
+ground truth the bid rules are scored against. The bids themselves stay on the machine that has
+them (see the bid accuracy harness in ARCHITECTURE.md); what follows is only what they taught.
+
+## 20. A bid is a scan, not a document
+93 % of pages are image scans: one merged PDF per bidder, in no fixed order, with blank backsides
+between documents. Pages are typed by their heading (21 types, English and Marathi), not by any
+word on the page — a turnover figure quoted in a covering letter does not make it a turnover
+certificate. Blank sheets are detected locally and never sent to OCR.
+
+## 21. Sworn statements restate every criterion
+Undertakings on stamp paper (हमीपत्र, प्रतिज्ञापत्र, affidavit) repeat the tender's requirements
+in the bidder's voice: "we have completed similar works…", "our registration is valid…". They are
+typed first, as affidavits, so no finder reads a promise as a certificate.
+
+## 22. A work certificate can state four amounts
+The estimate (पूर्वगणनपत्रक, पुगप, तरतूद), the tender amount, the contractor's accepted amount
+(ठेकेदाराची रक्कम) and the amount of work done (काम पूर्ण रक्कम, final bill, paid). The value of
+the work is the first of **done > accepted > tender amount**; the estimate is never the value of a
+contract. When the accepted amount is unreadable the reader stops there rather than falling back
+to the estimate.
+
+## 23. "Completed" is a claim the certificate can contradict
+Running-bill certificates (रनिंग बिल, १ ले बिल), "work in progress" (काम चालू, सुरु, बाकी) and
+percentages below 100 % all arrive under a completion heading. The form's own status line —
+"काम पूर्ण | काम पूर्ण, ३ रे अंतिम बिल" or "काम पूर्ण | काम चालू" — says which applies, and it
+decides.
+
+## 24. When a work finished is often not printed
+The certificate states a financial year (which spans two calendar years), or only a tender number
+("पीएमसी/रोड/२०२३/…", a floor: the work cannot have finished before it was tendered), or only its
+own issue date (a ceiling). The window check uses these bounds; a work that might or might not
+fall in the window makes the verdict `unknown — would qualify once confirmed`, never `fail`.
+
+## 25. Bids carry other firms' certificates
+A related firm's or a sub-contractor's certificate appears in the bid as if it were the bidder's.
+The contractor named on each certificate is compared with the bid's majority name (within one
+script — the same firm is written in English and in Marathi) and flagged.
+
+## 26. Bid capacity is recomputed, not copied
+The CA's certificate states A and B and a result. The result is recomputed on the tender's own
+`A × N × 1.5 − B`, with N from the tender, not the certificate. An A written two ways on the same
+page, or a certificate addressed to another authority, gives `unknown`.
+
+## 27. Turnover certificates come in every shape
+Amounts in a lakh or crore column heading, financial year beside assessment year, rupees and paise
+in separate columns, "receipts" instead of "turnover", bullet-prefixed year cells. The best year
+inside the tender's window is compared.
+
+## 28. BOQ certificates print the tender quantity beside the executed one
+Only the executed column ("Upto Date", "Work done quantity", प्रत्यक्ष केलेल्या कामाचे परिमाण)
+counts. Some certificates print items across a row with their quantities on the next; the same
+certificate is often enclosed twice. Quantities count per work, or summed over one financial year.
+
+## 29. The price is not in the technical envelope
+Form B / the percentage rate is in the financial envelope, opened later. Eligible bidders show
+"quoted price not found" until it is uploaded; nothing is ranked on a guessed price.
+
 ## Open items for the bidder phase
-Percentage-rate bids and the additional-performance-security ladder (§18); approved-make compliance
-(electrical); similar-work nature judgement using the per-tender (sometimes handwritten) nature
-text; bid-capacity certificates, including the "tentative will not be considered", CA UDIN and
-one-year validity rules; statements I–IV formats; the RFP technical rubrics (§16) — the DBT
-scorecard is read only as its ≥70% gate, not as the 100-mark breakdown behind it.
+The financial envelope (percentage-rate bids, §18's additional-performance-security ladder);
+bid-capacity certificate formalities (the "tentative will not be considered" rule, CA UDIN,
+one-year validity); statements I–IV beyond completed works; approved-make compliance
+(electrical); similar-work nature against the tender's own (sometimes handwritten) nature text;
+the RFP technical rubrics (§16). And the measure that matters next: accuracy on bids the rules were
+not built on — a second tender's envelopes with their ground truth.

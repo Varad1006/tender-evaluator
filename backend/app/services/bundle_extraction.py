@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from datetime import date
 
 from app.adapters.pdf_parser import ParsedDocument, Sentence
 from app.adapters.readability import ENGLISH_KINDS
@@ -30,8 +31,30 @@ from app.services.criteria_extraction import (
 )
 from app.services.pmc_eligibility import DocView
 from app.services.pmc_facts import FactCollector
+from app.services.values import ascii_digits
 
 PMC_SKIP_RULES = {"rule_completion", "rule_warranty", "rule_manufacturer", "rule_site_engineer", "rule_experience"}
+
+
+def _tender_fy(ref_no: str | None, docs: list[DocView]) -> int | None:
+    """The financial year the tender belongs to: from its reference ("…/2026-27/…"), else from the
+    latest date its documents print (an abstract's footer, a notice's date). It is the current
+    price level a stated escalation rule brings older figures up to."""
+    m = re.search(r"\b(20\d{2})\s*-\s*(\d{2})\b", ref_no or "")
+    if m and (int(m.group(1)) + 1) % 100 == int(m.group(2)):
+        return int(m.group(1))
+    latest = None
+    for d in docs:
+        if d.parsed is None:
+            continue
+        for p in d.parsed.pages:
+            for dm in re.finditer(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})\b", ascii_digits(p.raw_text or p.text or "")):
+                day, month, year = (int(x) for x in dm.groups())
+                if 1 <= day <= 31 and 1 <= month <= 12 and year <= date.today().year + 1:
+                    latest = max(latest or (0, 0, 0), (year, month, day))
+    if latest is None:
+        return None
+    return latest[0] if latest[1] >= 4 else latest[0] - 1
 
 
 def _english(doc: DocView):
@@ -152,7 +175,9 @@ def extract_bundle(docs: list[DocView], boqs: list[tuple[str, str, object]] | No
     # PMC works print a multiplying-factor table beside each financial criterion; a bidder's older
     # turnover and older project values are compared only after those factors are applied. The
     # table rides on the criteria it governs so the bidder phase cannot forget it.
-    index_table = indexation.merge(indexation.find_index_tables(eligibility_docs))
+    # Without a printed table, a rate stated in prose ("प्रतिवर्षी १०% वाढ") still governs.
+    index_table = indexation.merge(indexation.find_index_tables(eligibility_docs)) \
+        or indexation.table_from_stated_rule(eligibility_docs, _tender_fy(facts["ref_no"].value, docs))
     if index_table is not None:
         for key in ("pmc_max_turnover", "pmc_similar_works", "pmc_bid_capacity", "pmc_single_similar_work"):
             c = drafts.get(key)

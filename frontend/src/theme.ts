@@ -36,6 +36,16 @@ export const verdictStyle: Record<Verdict, { label: string; bg: string; fg: stri
   unknown: { label: 'Unknown', bg: '#FFF6E5', fg: '#92600C', border: '#F5D68A', solid: '#92600C' },
 };
 
+/** A condition that informs the committee but decides nothing (bid validity, rate analysis): neutral, not amber. */
+export const notGateStyle = { label: 'Not a gate', bg: '#F0F2F3', fg: '#4B5563', border: '#D5D9DE', solid: '#6B7280' };
+
+/** How a verdict looks where it sits: a pass reads the same everywhere; anything else on a non-gating
+ * criterion is neutral, since it cannot hold up or disqualify a bid. */
+export function verdictLook(verdict: Verdict, gating = true) {
+  if (gating || verdict === 'pass') return verdictStyle[verdict];
+  return verdict === 'fail' ? { ...notGateStyle, label: 'Not met (not a gate)' } : notGateStyle;
+}
+
 export const bucketStyle: Record<string, { bg: string; fg: string }> = {
   Financial: { bg: '#EEF2FF', fg: '#4338CA' },
   Technical: { bg: '#ECFDF3', fg: '#166534' },

@@ -84,6 +84,15 @@ def _scan_amounts(text: str) -> tuple[list[Amount], list[str]]:
     return out, refused
 
 
+_DEVANAGARI_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
+
+
+def ascii_digits(text: str) -> str:
+    """Marathi documents print numbers in Devanagari digits ("१२,३४,५६७/-", "सन २०२४-२५"). Parse on
+    this copy; quote the original, which is what the page says."""
+    return (text or "").translate(_DEVANAGARI_DIGITS)
+
+
 def parse_amounts(text: str) -> list[Amount]:
     return _scan_amounts(text)[0]
 

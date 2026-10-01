@@ -13,11 +13,16 @@ class Base(DeclarativeBase):
 
 
 def _make_engine(url: str):
-    engine = create_engine(url, connect_args={"check_same_thread": False} if url.startswith("sqlite") else {})
-    if url.startswith("sqlite"):
+    sqlite = url.startswith("sqlite")
+    # Several bids are read at once: readers must not block the writer (WAL), and a writer waits its
+    # turn rather than failing with "database is locked".
+    engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": 30} if sqlite else {})
+    if sqlite:
         @event.listens_for(engine, "connect")
-        def _fk_on(dbapi_conn, _):
+        def _pragmas(dbapi_conn, _):
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
+            dbapi_conn.execute("PRAGMA journal_mode=WAL")
+            dbapi_conn.execute("PRAGMA busy_timeout=30000")
     return engine
 
 
@@ -52,8 +57,28 @@ def init_db() -> None:
                 conn.execute(text(f'DROP TABLE IF EXISTS "{t}"'))
         shutil.rmtree(settings.UPLOAD_DIR / "tenders", ignore_errors=True)
     Base.metadata.create_all(engine)
+    _add_missing_columns()
     with engine.begin() as conn:
         conn.execute(text("INSERT OR REPLACE INTO eval_dg_meta (key, value) VALUES ('schema', :v)"), {"v": SCHEMA_VERSION})
+
+
+def _add_missing_columns() -> None:
+    """Additive schema changes (a new nullable column) are applied in place, so adding a field no
+    longer wipes the tenders already uploaded. Anything else still goes through SCHEMA_VERSION."""
+    import logging
+
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            existing = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                ddl = column.type.compile(dialect=engine.dialect)
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {ddl}'))
+                logging.getLogger(__name__).info("Added column %s.%s", table.name, column.name)
 
 
 def get_session() -> Iterator[Session]:

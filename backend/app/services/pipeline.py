@@ -9,7 +9,7 @@ import uuid
 from datetime import date, datetime
 from pathlib import Path
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.adapters.llm import get_llm
@@ -17,7 +17,7 @@ from app.adapters.pdf_parser import UnreadablePDF, parse_pdf
 from app.config import settings
 from app.db import SessionLocal
 from app.adapters.datalab_ocr import get_ocr
-from app.models import (Bidder, BidderCriterionVerdict, BidderDocument, BidderExtractedValue, Criterion, Tender,
+from app.models import (Bidder, BidderCriterionVerdict, BidderDocument, BidderExtractedValue, Criterion, Meta, Tender,
                         TenderDocument)
 from app.services import tender_processing as tp
 from app.services.bidder_extraction import Claim, CriterionSpec, extract_bidder
@@ -123,6 +123,7 @@ def process_tender(tender_id: str) -> None:
                 raise UnreadablePDF("No PDF or BOQ spreadsheet found in the upload. " + " ".join(warnings))
             ids = [str(uuid.uuid4()) for _ in files]
             docs = tp.local_pass(files, ids)
+            bundle = tp.BundleResult(docs, tp.extract(docs), warnings)  # before any write: SQLite has one writer
             for pos, d in enumerate(docs):
                 session.add(TenderDocument(
                     id=d.document_id, tender_id=tender.id, position=pos, file_name=d.name, origin=d.origin,
@@ -131,7 +132,6 @@ def process_tender(tender_id: str) -> None:
                 ))
             session.flush()
             session.refresh(tender)
-            bundle = tp.BundleResult(docs, tp.extract(docs), warnings)
             bundle.timings["local"] = time.time() - started
         except UnreadablePDF as exc:
             tender.extraction_status, tender.extraction_error = "failed", str(exc)
@@ -182,53 +182,269 @@ def process_tender(tender_id: str) -> None:
         session.refresh(tender)
         _apply_result(session, tender, bundle)
         tender.ocr_status = "done" if not errors else ("failed" if len(errors) >= max(1, total) else "done")
-        tender.ocr_progress = {"done": total, "total": total, "cached": cached, "errors": errors[:10]}
+        tender.ocr_progress = {"done": total, "total": total, "cached": cached, "errors": errors[:10], **_usage(ocr)}
         tender.timings = {**(tender.timings or {}), "ocr_seconds": round(time.time() - started, 2)}
         session.commit()
 
 
-def _spec(c: Criterion) -> CriterionSpec:
+RESUME_LIMIT = 2  # a job that dies every time (a PDF that kills the parser) must not crash-loop the server
+
+
+def _count_resume(session: Session, key: str) -> int:
+    row = session.get(Meta, key)
+    attempts = (int(row.value) if row else 0) + 1
+    session.merge(Meta(key=key, value=str(attempts)))
+    return attempts
+
+
+def resume_interrupted() -> list[tuple]:
+    """Jobs a server stop cut short stay 'extracting' / OCR 'running' / bidder 'Extracting' forever
+    otherwise — and a stuck bidder blocks evaluation. Resets them and returns (job, id) pairs to
+    re-run from the saved uploads; OCR pages already paid for come back from the cache."""
+    jobs: list[tuple] = []
+    with SessionLocal() as session:
+        stuck = session.scalars(select(Tender).where(or_(Tender.extraction_status.in_(("pending", "extracting")),
+                                                          Tender.ocr_status.in_(("queued", "running"))))).all()
+        stuck_bids = session.scalars(select(Bidder).where(Bidder.status.in_(("Registered", "Extracting")))).all()
+        # A counter tracks consecutive interruptions of one job; drop those of jobs no longer stuck
+        # (finished before the stop, or their tender or bid deleted).
+        live = {f"rt:{t.id}" for t in stuck} | {f"rb:{b.id}" for b in stuck_bids}
+        session.execute(delete(Meta).where(or_(Meta.key.like("rt:%"), Meta.key.like("rb:%")), Meta.key.not_in(live)))
+        for t in stuck:
+            if not uploads_dir(t.id).is_dir():
+                t.extraction_status, t.extraction_error = "failed", "The uploaded files are missing. Upload the tender again."
+                t.ocr_status = "not_needed" if t.ocr_status in ("queued", "running") else t.ocr_status
+                continue
+            if _count_resume(session, f"rt:{t.id}") > RESUME_LIMIT:
+                if t.extraction_status == "ready":
+                    t.ocr_status = "failed"
+                    t.ocr_progress = {**(t.ocr_progress or {}), "errors": ["OCR was interrupted by repeated server restarts."]}
+                else:
+                    t.extraction_status = "failed"
+                    t.extraction_error = "Processing was interrupted by repeated server restarts. Upload the tender again."
+                continue
+            # Start clean: the half-written registry and unpacked bundle are rebuilt from the uploads.
+            session.execute(delete(Criterion).where(Criterion.tender_id == t.id))
+            session.execute(delete(TenderDocument).where(TenderDocument.tender_id == t.id))
+            shutil.rmtree(tender_dir(t.id) / "bundle", ignore_errors=True)
+            t.extraction_status, t.extraction_error = "pending", None
+            t.ocr_status, t.ocr_progress = "not_needed", {}
+            jobs.append((process_tender, t.id))
+        for b in stuck_bids:
+            if _count_resume(session, f"rb:{b.id}") > RESUME_LIMIT:
+                b.status, b.error = "Failed", "Extraction was interrupted by repeated server restarts. Upload the bid again."
+                continue
+            b.status = "Registered"
+            jobs.append((process_bidder, b.id))
+        session.commit()
+    return jobs
+
+
+def _usage(ocr) -> dict:
+    """What the OCR service billed this job (pages, cents), when the client reports it."""
+    return ocr.usage() if hasattr(ocr, "usage") else {}
+
+
+def run_jobs(jobs: list[tuple]) -> None:
+    """One after another, so a burst of resumed tenders does not exceed the OCR plan's rate limit."""
+    for job, arg in jobs:
+        try:
+            job(arg)
+        except Exception:  # pragma: no cover - each job records its own failure
+            log.exception("Resumed job %s(%s) failed", job.__name__, arg)
+        # It ran to the end: a later interruption is a new one, not the next in a crash loop.
+        with SessionLocal() as session:
+            session.execute(delete(Meta).where(Meta.key.in_((f"rt:{arg}", f"rb:{arg}"))))
+            session.commit()
+
+
+def _spec(c: Criterion, tender_ctx: dict | None = None) -> CriterionSpec:
     return CriterionSpec(key=c.key, label=c.label, operator=c.operator, params=c.params or {},
                          threshold_value=c.threshold_value, threshold_unit=c.threshold_unit,
-                         extraction_method=c.extraction_method)
+                         extraction_method=c.extraction_method, tender=tender_ctx or {})
+
+
+def bidder_uploads_dir(tender_id: str, bidder_id: str) -> Path:
+    return bidder_dir(tender_id, bidder_id) / "uploads"
+
+
+def _bidder_uploads(bidder: Bidder) -> list[tuple[str, Path]]:
+    folder = bidder_uploads_dir(bidder.tender_id, bidder.id)
+    if folder.is_dir():
+        return [(p.name, p) for p in sorted(folder.iterdir()) if p.is_file()]
+    # Bidders uploaded before bundles were supported: one PDF stored beside its document row.
+    out = []
+    for d in bidder.documents:
+        path = guarded_bidder_path(bidder.tender_id, bidder.id, d.file_path)
+        if path.exists():
+            out.append((d.file_name, path))
+    return out
+
+
+def _save_claims(session: Session, bidder: Bidder, result) -> None:
+    session.execute(delete(BidderExtractedValue).where(BidderExtractedValue.bidder_id == bidder.id))
+    for claim in result.claims:
+        session.add(BidderExtractedValue(
+            bidder_id=bidder.id, criteria_key=claim.criteria_key, document_id=claim.detail.get("document_id"),
+            value=claim.value[:255], value_numeric=claim.value_numeric,
+            detail={k: v for k, v in claim.detail.items() if k != "document_id"}, evidence_page=claim.page,
+            evidence_quote=claim.quote, evidence_section=(claim.section or "")[:255] or None,
+            extraction_tier=claim.tier,
+        ))
+
+
+def _apply_bid(session: Session, bidder: Bidder, docs, result, name_given: bool) -> None:
+    by_id = {d.document_id: d for d in docs}
+    for row in bidder.documents:
+        d = by_id.get(row.id)
+        if d is None or d.parsed is None:
+            continue
+        row.page_kinds = [p.quality.kind for p in d.parsed.pages]
+        row.page_types = result.types_by_doc.get(row.id)
+        row.ocr_modes = {str(k): v for k, v in d.ocr_modes.items()}
+        types = [t for t in (row.page_types or []) if t]
+        row.doc_type = "emd_receipt" if types and set(types) == {"emd_receipt"} else "combined"
+    _save_claims(session, bidder, result)
+    facts = dict(result.identity)
+    facts["contents"] = {row.id: result.contents_by_doc.get(row.id, []) for row in bidder.documents}
+    if not name_given:
+        # Re-read every pass: before OCR a scanned bid may yield only a supplier on an invoice.
+        firm = (result.identity.get("firm_name") or {}).get("value")
+        bidder.bidder_name = firm or (f"Bid {bidder.bid_ref}" if bidder.bid_ref else "Unnamed bidder")
+        facts["name_derived"] = True
+    bidder.facts = facts
+
+
+def _fail_bidder(bidder_id: str, message: str) -> None:
+    with SessionLocal() as session:
+        bidder = session.get(Bidder, bidder_id)
+        if bidder is not None:
+            bidder.status, bidder.error = "Failed", message
+            session.commit()
 
 
 def process_bidder(bidder_id: str) -> None:
+    """Bid pipeline: expand the envelope → local pass → claims → OCR → claims again.
+
+    The database is touched only in short transactions around the reading, never during it: bids
+    are read concurrently and SQLite has one writer."""
+    from app.services import bidder_processing as bp
+
+    # 1. What the job needs, and mark the bid as being read.
     with SessionLocal() as session:
         bidder = session.get(Bidder, bidder_id)
-        if bidder is None or not bidder.documents:
+        if bidder is None:
             return
-        bidder.status = "Extracting"
-        session.commit()
-        document = bidder.documents[0]
+        tender = load_tender(session, bidder.tender_id)
+        tender_id = bidder.tender_id
+        name_given = bool(bidder.bidder_name) and not (bidder.facts or {}).get("name_derived")
         try:
-            path = guarded_bidder_path(bidder.tender_id, bidder.id, document.file_path)
-            doc = parse_pdf(path)
-            criteria = session.scalars(select(Criterion).where(Criterion.tender_id == bidder.tender_id)
-                                       .order_by(Criterion.display_order)).all()
-            result = extract_bidder(doc, [_spec(c) for c in criteria], document.file_name, llm=get_llm())
+            uploads = _bidder_uploads(bidder)
         except CrossBidderPathLeak:
-            log.critical("Cross-bidder path leak blocked for bidder %s", bidder.id)
-            bidder.status, bidder.error = "Failed", "A security check blocked this action. Contact support."
-            session.commit()
-            return
-        except UnreadablePDF as exc:
-            bidder.status, bidder.error = "Failed", f"This document needs manual review. {exc}"
-            session.commit()
-            return
+            uploads = None
+        ctx = bp.tender_context(tender)
+        specs = [_spec(c, ctx) for c in tender.criteria]
+        bidder.status, bidder.error = "Extracting", None
+        session.commit()
+    if uploads is None:
+        log.critical("Cross-bidder path leak blocked for bidder %s", bidder_id)
+        _fail_bidder(bidder_id, "A security check blocked this action. Contact support.")
+        return
 
-        document.page_count = doc.page_count
-        if not bidder.bidder_name:  # unless the committee named the bidder, take it from the document
-            bidder.bidder_name = result.bidder_name
-        session.execute(delete(BidderExtractedValue).where(BidderExtractedValue.bidder_id == bidder.id))
-        for claim in result.claims:
-            session.add(BidderExtractedValue(
-                bidder_id=bidder.id, criteria_key=claim.criteria_key, document_id=document.id, value=claim.value,
-                value_numeric=claim.value_numeric, detail=claim.detail, evidence_page=claim.page,
-                evidence_quote=claim.quote, evidence_section=claim.section, extraction_tier=claim.tier,
+    # 2. Read the bid: no transaction open.
+    started = time.time()
+    try:
+        if not uploads:
+            raise UnreadablePDF("The uploaded files are missing. Upload the bid again.")
+        bundle_dir = bidder_dir(tender_id, bidder_id) / "bundle"
+        shutil.rmtree(bundle_dir, ignore_errors=True)
+        files, warnings = expand(uploads, bundle_dir)
+        if not files:
+            raise UnreadablePDF("No PDF found in the upload. " + " ".join(warnings))
+        docs = tp.local_pass(files, [str(uuid.uuid4()) for _ in files], role="bidder")
+        result = bp.extract(docs, specs, llm=get_llm())
+    except UnreadablePDF as exc:
+        _fail_bidder(bidder_id, f"This bid needs manual review. {exc}")
+        return
+    except Exception as exc:  # pragma: no cover - defensive
+        log.exception("Bid extraction failed")
+        _fail_bidder(bidder_id, f"Extraction failed: {exc}")
+        return
+
+    ocr = get_ocr()
+    planned = bp.plan_ocr(docs)
+    local_warnings = warnings + result.warnings
+    if not planned or ocr is None:
+        local_warnings += bp.coverage_warnings(docs, ocr_available=ocr is not None)
+
+    # 3. Write what was read.
+    with SessionLocal() as session:
+        bidder = session.get(Bidder, bidder_id)
+        if bidder is None:
+            return  # removed while it was being read
+        # Re-runnable: verdicts point at documents, so they go first, then the old document rows.
+        session.execute(delete(BidderCriterionVerdict).where(BidderCriterionVerdict.bidder_id == bidder_id))
+        session.execute(delete(BidderExtractedValue).where(BidderExtractedValue.bidder_id == bidder_id))
+        session.execute(delete(BidderDocument).where(BidderDocument.bidder_id == bidder_id))
+        session.flush()
+        for pos, d in enumerate(docs):
+            session.add(BidderDocument(
+                id=d.document_id, bidder_id=bidder_id, position=pos, doc_type="combined", file_name=d.name,
+                origin=d.origin, file_path=str(d.path), file_hash=d.file_hash, page_count=len(d.scans) or None,
+                page_kinds=[s.quality.kind for s in d.scans], error=d.error,
             ))
+        session.flush()
+        session.refresh(bidder)
+        _apply_bid(session, bidder, docs, result, name_given)
+        bidder.warnings = local_warnings
+        bidder.ocr_status = ("running" if ocr else "unavailable") if planned else "not_needed"
+        bidder.ocr_progress = {"done": 0, "total": len(planned), "cached": 0, "errors": []}
+        bidder.timings = {"local_seconds": round(time.time() - started, 2)}
+        if not planned or ocr is None:
+            if not result.claims and not any(d.parsed and d.parsed.readable_pages for d in docs):
+                bidder.status = "Failed"
+                bidder.error = "No page of this bid has readable text, and OCR is not configured."
+            else:
+                bidder.status = "ClaimsReady"
+            session.commit()
+            return
+        session.commit()  # still "Extracting": most of a scanned bid is not read yet
+
+    def progress(done: int, total: int) -> None:
+        with SessionLocal() as s2:
+            b = s2.get(Bidder, bidder_id)
+            if b is not None:
+                b.ocr_progress = {**(b.ocr_progress or {}), "done": done, "total": total}
+                s2.commit()
+
+    # 4. OCR, then read again: no transaction open.
+    t_ocr = time.time()
+    try:
+        total, cached, errors = bp.run_ocr(docs, ocr, on_progress=progress)
+        result = bp.extract(docs, specs, llm=get_llm())
+    except Exception as exc:  # OCR must never undo the local result
+        log.exception("Bid OCR pass failed")
+        with SessionLocal() as session:
+            bidder = session.get(Bidder, bidder_id)
+            if bidder is not None:
+                bidder.ocr_status = "failed"
+                bidder.ocr_progress = {**(bidder.ocr_progress or {}), "errors": [str(exc)[:300]]}
+                bidder.status = "ClaimsReady"
+                session.commit()
+        return
+
+    # 5. Write the final reading.
+    with SessionLocal() as session:
+        bidder = session.get(Bidder, bidder_id)
+        if bidder is None:
+            return
+        _apply_bid(session, bidder, docs, result, name_given)
+        bidder.warnings = list(dict.fromkeys(warnings + result.warnings + bp.skipped_by_cap(docs)
+                                             + bp.coverage_warnings(docs, True, errors)))
+        bidder.ocr_status = "done" if not errors else ("failed" if len(errors) >= max(1, total) else "done")
+        bidder.ocr_progress = {"done": total, "total": total, "cached": cached, "errors": errors[:10], **_usage(ocr)}
+        bidder.timings = {**(bidder.timings or {}), "ocr_seconds": round(time.time() - t_ocr, 2)}
         bidder.status = "ClaimsReady"
-        bidder.error = "\n".join(result.warnings) or None
         session.commit()
 
 
@@ -254,16 +470,25 @@ def _claim_from_row(row: BidderExtractedValue) -> Claim:
 
 def evaluate_tender(session: Session, tender: Tender) -> int:
     session.execute(delete(BidderCriterionVerdict).where(BidderCriterionVerdict.tender_id == tender.id))
+    from app.services.bidder_processing import tender_context
+
     llm = get_llm()
     reference = _reference_date(tender)
+    ctx = tender_context(tender)
+    dates = [b.facts.get("bid_date") for b in tender.bidders if b.facts and b.facts.get("bid_date")]
+    fallback_bid_date = max(dates) if dates else None
     count = 0
     for bidder in tender.bidders:
         if bidder.status != "ClaimsReady":
             continue
         rows = session.scalars(select(BidderExtractedValue).where(BidderExtractedValue.bidder_id == bidder.id)).all()
+        # A receipt screenshot cropped without its timestamp still belongs to the same submission
+        # window as the other bids: the latest of theirs stands in.
+        bidder_ctx = {**ctx, "bid_date": (bidder.facts or {}).get("bid_date") or fallback_bid_date}
         for criterion in tender.criteria:
             claims = [_claim_from_row(r) for r in rows if r.criteria_key == criterion.key]
-            result = evaluate_criterion(_spec(criterion), claims, criterion.source_quote or criterion.label, reference, llm)
+            result = evaluate_criterion(_spec(criterion, bidder_ctx), claims, criterion.source_quote or criterion.label,
+                                        reference, llm)
             primary = result.evidence[0] if result.evidence else None
             session.add(BidderCriterionVerdict(
                 tender_id=tender.id, bidder_id=bidder.id, criterion_id=criterion.id, criteria_key=criterion.key,
@@ -320,17 +545,27 @@ def serialize_document(d: TenderDocument) -> dict:
 
 
 def serialize_bidder(session: Session, b: Bidder) -> dict:
-    doc = b.documents[0] if b.documents else None
     prices = session.scalars(select(BidderExtractedValue).where(
         BidderExtractedValue.bidder_id == b.id, BidderExtractedValue.criteria_key == "quoted_price")).all()
     distinct = {p.value_numeric for p in prices}
     price = prices[0] if len(distinct) == 1 else None
     covered = set(session.scalars(select(BidderExtractedValue.criteria_key).where(
         BidderExtractedValue.bidder_id == b.id, BidderExtractedValue.criteria_key != "quoted_price")).all())
+    main = max(b.documents, key=lambda d: d.page_count or 0) if b.documents else None
+    facts = b.facts or {}
     return {
-        "id": b.id, "name": b.bidder_name, "status": b.status, "error": b.error,
+        "id": b.id, "name": b.bidder_name, "status": b.status, "error": b.error, "bid_ref": b.bid_ref,
         "criteria_with_evidence": len(covered),
-        "document": {"id": doc.id, "file_name": doc.file_name, "page_count": doc.page_count} if doc else None,
+        "document": {"id": main.id, "file_name": main.file_name, "page_count": main.page_count} if main else None,
+        "documents": [{
+            "id": d.id, "file_name": d.file_name, "origin": d.origin, "doc_type": d.doc_type, "page_count": d.page_count,
+            "page_kinds": d.page_kinds or [], "page_types": d.page_types or [],
+            "contents": (facts.get("contents") or {}).get(d.id, []), "error": d.error,
+            "ocr_pages": len(d.ocr_modes or {}),
+        } for d in b.documents],
+        "identity": {k: v for k, v in facts.items() if k != "contents"},
+        "warnings": b.warnings or [],
+        "ocr_status": b.ocr_status or "not_needed", "ocr_progress": b.ocr_progress or {}, "timings": b.timings or {},
         "price": price.value_numeric if price else None,
         "price_display": format_inr(price.value_numeric) if price else None,
         "price_citation": {"document_id": price.document_id, "page": price.evidence_page, "quote": price.evidence_quote}
@@ -403,11 +638,14 @@ def build_evaluation(session: Session, tender: Tender, include_ranking: bool) ->
         mine = [v for v in verdicts if v["bidder_id"] == b["id"]]
         status = overall_status([(v["verdict"], criteria[v["criterion_id"]].gating) for v in mine])
         b["overall"] = status
-        b["counts"] = {k: sum(1 for v in mine if v["verdict"] == k) for k in ("pass", "fail", "unknown")}
+        # A non-gating condition (bid validity, rate analysis) is noted, never counted as an issue.
+        noted = {v["id"] for v in mine if v["verdict"] != "pass" and not criteria[v["criterion_id"]].gating}
+        b["counts"] = {k: sum(1 for v in mine if v["verdict"] == k and v["id"] not in noted) for k in ("pass", "fail", "unknown")}
+        b["counts"]["not_a_gate"] = len(noted)
         issues = [{
             "criterion_id": v["criterion_id"], "criterion_label": criteria[v["criterion_id"]].label,
             "verdict": v["verdict"], "reason": v["reason"], "requirement": v["requirement"], "evidence": v["evidence"],
-        } for v in mine if v["verdict"] != "pass"]
+        } for v in mine if v["verdict"] != "pass" and v["id"] not in noted]
         issues.sort(key=lambda i: i["verdict"] != "fail")
         b["issues"] = issues
         standings.append(BidderStanding(bidder_id=b["id"], name=b["name"], status=status, price=b["price"],

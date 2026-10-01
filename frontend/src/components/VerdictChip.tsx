@@ -1,9 +1,10 @@
 import CancelRoundedIcon from '@mui/icons-material/CancelRounded';
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded';
 import HelpRoundedIcon from '@mui/icons-material/HelpRounded';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { Chip } from '@mui/material';
 import type { MouseEvent } from 'react';
-import { verdictStyle, type Verdict } from '../theme';
+import { verdictLook, type Verdict } from '../theme';
 
 const ICONS = {
   pass: CheckCircleRoundedIcon,
@@ -13,13 +14,15 @@ const ICONS = {
 
 interface Props {
   verdict: Verdict;
+  /** False for a condition that does not decide eligibility; its non-pass verdicts render neutral. */
+  gating?: boolean;
   onClick?: (e: MouseEvent<HTMLElement>) => void;
   selected?: boolean;
 }
 
-export function VerdictChip({ verdict, onClick, selected }: Props) {
-  const s = verdictStyle[verdict];
-  const Icon = ICONS[verdict];
+export function VerdictChip({ verdict, gating = true, onClick, selected }: Props) {
+  const s = verdictLook(verdict, gating);
+  const Icon = gating || verdict === 'pass' ? ICONS[verdict] : InfoOutlinedIcon;
   return (
     <Chip
       size="small"

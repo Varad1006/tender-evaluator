@@ -54,7 +54,7 @@ export function OcrBanner({ tender }: { tender: TenderDetail }) {
   return null;
 }
 
-function KindStrip({ kinds }: { kinds: PageKind[] }) {
+export function KindStrip({ kinds }: { kinds: PageKind[] }) {
   return (
     <Stack direction="row" sx={{ height: 8, borderRadius: 1, overflow: 'hidden', bgcolor: tokens.hover, width: '100%' }}>
       {kinds.map((k, i) => (

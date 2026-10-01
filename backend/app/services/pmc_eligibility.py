@@ -33,7 +33,7 @@ from app.adapters.pdf_parser import ParsedDocument, Sentence
 from app.adapters.readability import ENGLISH_KINDS
 from app.services.criteria_extraction import CriterionDraft
 from app.services.pmc_facts import Fact
-from app.services.values import format_inr, format_inr_short, parse_amounts, words_to_amount
+from app.services.values import ascii_digits, format_inr, format_inr_short, parse_amounts, words_to_amount
 
 TWO_LAKH = 200_000
 ONE_POINT_FIVE_CR = 15_000_000
@@ -124,6 +124,36 @@ def find_mr(docs: list[DocView], *signatures: str) -> Located | None:
             if p.quality.kind in ("marathi", "english") and all(_squash(sig) in _squash(p.raw_text) for sig in signatures):
                 return Located(d, p.number, None, language="mr")
     return None
+
+
+def _states_emd_rule(where: Located) -> bool:
+    """The EMD clause's page states PMC's two tiers (1% up to ₹1.5 Cr, 0.5% above), so an amount
+    can be worked out from it rather than assumed."""
+    page = where.doc.parsed.pages[where.page - 1] if where.doc.parsed and 0 < where.page <= len(where.doc.parsed.pages) else None
+    text = ascii_digits((page.text if page else "") or "")
+    return bool(re.search(r"(?<![\d.])1\s*%", text) and re.search(r"0\s*\.\s*5\s*%", text))
+
+
+def find_mr_re(docs: list[DocView], pattern: str) -> Located | None:
+    """find_mr for a clause whose wording varies (spellings, OCR misreadings): a pattern over one
+    OCR sentence or table row, quoted."""
+    rx = re.compile(pattern, re.I | re.S)
+    for d, s in _sentences(docs, {"ocr_mr", "ocr_en"}):
+        text = " ".join(s.row) if s.in_table and s.row else s.text
+        if rx.search(text):
+            return Located(d, s.page, text, s.clause, s.section, "mr", "ocr")
+    return None
+
+
+# The bid-capacity formula as Marathi conditions print it, "(अ x एन x १.५) - बी", and the word in
+# its spellings: कॅपॅसिटी, कंपेसिटी, कपॅसिटी, कॅपेसिटी.
+_BID_CAPACITY_MR = (r"\(\s*अ\s*[x×X*]\s*एन\s*[x×X*]\s*१\s*\.\s*५\s*\)\s*[-–]\s*बी",
+                    r"ब[ीि]ड\s*क[ॅंॉ]?प[ॅेै]?स[ीि]टी")
+# A prohibition, not a mention: "निविदेत Joint Venture अनुज्ञेय राहणार नाही". A list of points on
+# which a JV's agreement is to be clarified mentions joint ventures because they may bid.
+_JV_BANNED_MR = (r"(?:Joint\s*Venture|जॉइंट\s*व्हें?चर|संयुक्त\s*उपक्रम|कन्सोर्शियम|Consortium).{0,60}"
+                 r"(?:अनुज्ञेय\s*(?:राहणार\s*)?नाही|ग्राह्य\s*(?:धरल\S*\s*)?(?:जाणार\s*)?नाही|परवानगी\s*(?:\S+\s*){0,2}नाही"
+                 r"|चालणार\s*नाही|not\s*(?:be\s*)?(?:allowed|permitted|accepted))")
 
 
 # --------------------------------------------------------------------------------------
@@ -396,6 +426,9 @@ def build(docs: list[DocView], facts: dict[str, Fact], authority_is_pmc: bool) -
         elif stated is None and clause_value is not None and not any(_close(clause_value, f) for f in targets):
             stated = clause_value  # the tender's own, non-formula figure governs (reconciled below)
     threshold, rec_notes, outcome = _reconcile(stated, E, E_total, fn, "turnover")
+    if threshold is None and not years:
+        rec_notes.append("The completion period is not stated in this bundle, so the annual value (E ÷ years) and "
+                         "this threshold cannot be worked out. Take the period from the tender notice.")
     result.criteria.append(_draft(
         "pmc_max_turnover", "Maximum Annual Turnover (any of last 5 years)", "Financial", "currency", ">=",
         "deterministic", f"≥ {format_inr(threshold)}" if threshold else "≥ 75% of annual value (E × 0.75 ÷ years)",
@@ -475,7 +508,8 @@ def build(docs: list[DocView], facts: dict[str, Fact], authority_is_pmc: bool) -
 
     # 3. Bid capacity ----------------------------------------------------------------------
     where = sheet_loc("bid_capacity") or find_en(docs, r"\(\s*A\s*[x×]\s*N\s*[x×]\s*1\.?5\s*\)\s*-\s*B|bid capacity") \
-        or find_mr(docs, "१.५", "बीड")
+        or find_mr(docs, "कॅपॅसिटी") or find_mr(docs, "१.५", "बीड कॅ") \
+        or find_mr_re(docs, _BID_CAPACITY_MR[0]) or find_mr_re(docs, _BID_CAPACITY_MR[1])
     claim(where)
     stated_bc = sheet.bid_capacity if sheet else None
     bc, notes, outcome = _reconcile(stated_bc, E, E_total, lambda e: e, "bid capacity")
@@ -503,6 +537,12 @@ def build(docs: list[DocView], facts: dict[str, Fact], authority_is_pmc: bool) -
                               method="ocr" if _kind(sheet.doc, sheet.items_page or sheet.page).startswith("ocr") else "text")
     elif qty_clause:
         items = _key_quantities(docs, qty_clause)
+    if not items:
+        # The quantities are often a separate sheet at the back of the bundle: "Sr.No | Item | Tender
+        # Quantity | Minimum Quantity Required", after the notice's own table was left blank.
+        found = _minimum_quantity_table(docs)
+        if found:
+            items, items_where = found
     listed = _listed_quantity_items(qty_clause) if qty_clause and not items else []
     where = items_where or qty_clause or find_mr(docs, "३०%")
     claim(where)
@@ -553,6 +593,12 @@ def build(docs: list[DocView], facts: dict[str, Fact], authority_is_pmc: bool) -
             where = Located(doc, src.page, src.quote, method="ocr" if src.ocr else "text")
     claim(where)
     notes = []
+    if emd is None and E and where is not None and _states_emd_rule(where):
+        # No figure printed, but the rule is: the amount follows from it and the estimated cost.
+        emd = float(round(0.01 * E if E <= ONE_POINT_FIVE_CR else max(0.005 * E, 150_000)))
+        notes.append(f"The tender states the rule, not a figure: "
+                     f"{'1% of' if E <= ONE_POINT_FIVE_CR else '0.5% (at least ₹1.5 lakh) of'} the estimated cost put "
+                     f"to tender {format_inr(E)} = {format_inr(emd)}. Confirm against the portal's EMD.")
     if emd is not None and E:
         expected = 0.01 * E if E <= ONE_POINT_FIVE_CR else max(0.005 * E, 150_000)
         if not _close(emd, expected, tol=0.02):
@@ -590,7 +636,7 @@ def build(docs: list[DocView], facts: dict[str, Fact], authority_is_pmc: bool) -
 
     # 6. No joint venture ---------------------------------------------------------------------
     where = find_en(docs, r"Joint\s*venture.{0,60}(?:not\s*allowed|not\s*permitted)|Consortium\s*is\s*not\s*allowed|No\s*consortium") \
-        or find_mr(docs, "Joint Venture")
+        or find_mr_re(docs, _JV_BANNED_MR)
     claim(where)
     if where:
         result.criteria.append(_draft(
@@ -675,6 +721,36 @@ def _item_name(name: str) -> str:
     for pat, fix in _ITEM_FIXES:
         name = re.sub(pat, fix, name, flags=re.I)
     return name
+
+
+_MIN_QTY_HEAD = re.compile(r"minimum\s*quantit|min\.?\s*qty|किमान\s*परिमाण", re.I)
+_QTY_VALUE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*([A-Za-z.]*)")
+
+
+def _minimum_quantity_table(docs: list[DocView]) -> tuple[list[dict], Located] | None:
+    for d in docs:
+        if d.parsed is None:
+            continue
+        for p in d.parsed.pages:
+            for rows in p.tables:
+                for h, head in enumerate(rows[:3]):
+                    col = next((j for j, c in enumerate(head) if _MIN_QTY_HEAD.search(c or "")), None)
+                    item_col = next((j for j, c in enumerate(head) if re.search(r"^\s*(?:item|particular|description|बाब)", c or "", re.I)), None)
+                    if col is None or item_col is None:
+                        continue
+                    items = []
+                    for row in rows[h + 1:]:
+                        if col >= len(row) or item_col >= len(row):
+                            continue
+                        m = _QTY_VALUE.search(ascii_digits(row[col] or ""))
+                        name = (row[item_col] or "").strip()
+                        if not m or not name:
+                            continue
+                        items.append({"item": name, "qty": float(m.group(1).replace(",", "")), "unit": _unit(m.group(2) or "")})
+                    if items:
+                        quote = "; ".join(f"{i['item']} ≥ {i['qty']:g} {i['unit']}".strip() for i in items)
+                        return items, Located(d, p.number, quote, method="ocr" if p.quality.kind.startswith("ocr") else "text")
+    return None
 
 
 def _key_quantities(docs: list[DocView], hit: Located) -> list[dict]:

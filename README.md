@@ -8,8 +8,9 @@ Scope follows the *Tender Evaluator: PoC Build Brief*: three screens, one seeded
 FSD (`FSD_TenderEvaluatorPMC_20260917.md`) remain the source of truth for everything the Brief doesn't narrow.
 
 ```
-Upload tender PDF → Criteria grid → Upload 2–3 bidder PDFs → Verdict grid → click a verdict → Dual-citation popover
-                                                                        └→ Comparison matrix + L1 ranked shortlist
+Upload tender (PDF or MahaTender bundle) → Criteria grid → Upload bid envelopes → Verdict grid → click a verdict
+                                                                     → Dual-citation popover
+                                                                     └→ Comparison matrix + L1 ranked shortlist
 ```
 
 ## Quick start
@@ -60,6 +61,20 @@ Run the whole corpus from the command line (OCR results are cached per file hash
 uv run python scripts/corpus_report.py "/path/to/Dataset Tenders" --ocr --json report.json
 uv run python scripts/score_corpus.py report.json   # accuracy vs tests/data/corpus_truth.json (297 hand-verified checks)
 ```
+
+### Real bids (MahaTender envelopes)
+
+On a tender's **Bidders** page, use **Upload envelopes** and pick the technical envelopes as downloaded from the
+portal (`Fee_PreQual_Technical_<bid id>.zip`): one zip is one bidder, and several can go at once. A bidder can also be
+added from several PDFs. Each bid is read in the background: page typing (EMD receipt, registration, turnover and
+bid-capacity certificates, work-completion and BOQ certificates, affidavits and so on), then OCR of the scanned pages
+(most of a bid; capped by `TE_OCR_MAX_PAGES_PER_BIDDER`, default 300), then evidence per criterion. The page shows each
+bid's firm name and constitution with the page they come from, its bid date, and its contents by document type. When
+every bid is read, **Run Evaluation**. How bids are read and judged: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#bid-envelopes--the-same-hybrid-pipeline-read-for-evidence).
+
+Bidder documents are used to build and check the rules only. None are in this repository or pre-loaded into the app.
+Their ground truth stays in the git-ignored `backend/tests/local/`, scored by `scripts/bid_report.py` +
+`scripts/score_bids.py`.
 
 ### Optional: LLM-assisted extraction (Gemini)
 
@@ -152,7 +167,8 @@ never collapsed to one side. Comparison and ranking are recomputed live from the
 ## Tests
 
 ```bash
-cd backend && uv run pytest        # 117 tests; corpus golden + accuracy tests run when ~/Desktop/Dataset Tenders exists (or TE_CORPUS_DIR), replaying the OCR cache offline
+cd backend && uv run pytest        # 210 tests; corpus golden + accuracy tests run when ~/Desktop/Dataset Tenders exists (or TE_CORPUS_DIR), and
+                                   # the bid ground truth when backend/tests/local/ has it, both replaying the OCR cache offline
 cd frontend && npm run build       # type-check + production build
 ```
 
@@ -161,13 +177,20 @@ thresholds, the full 24-cell verdict matrix, 100% dual-citation coverage on pass
 metric), contradiction handling, and the ranking. `test_evaluation.py` checks the rules above, including that
 deterministic criteria never call the LLM and that the LLM judge runs only after the arithmetic gates.
 `test_llm_adapter.py` checks retries, backoff, and rejection of LLM quotes that aren't on the cited page.
+For real end-to-end time and cost, run `scripts/e2e_run.py` (tender upload → bid upload → evaluation, through the API)
+against a backend started with an empty `TE_DATA_DIR`, then `scripts/e2e_metrics.py`: times per stage, OCR pages and
+the cost Datalab billed, every verdict, and a check that each quoted requirement and piece of evidence is on the page it
+cites.
+`test_bid_matching.py` pins the bid rules on synthetic pages (certificate values and status, year bounds, bid
+capacity, registration date, key quantities, turnover grids), and `test_resume.py` the recovery of jobs cut short
+by a server stop.
 
 ## Deliberately not built (Brief's "Explicitly Cut" list)
 
 RBAC and multi-evaluator sign-off (one demo user), consistency-flag detection, lifecycle enforcement (the status is a
-label: *Draft* → *Under Evaluation* on first bid), audit trail, exports, multi-document bidders (one combined PDF
-each), consortium/JV, cross-tender intelligence, EN/MR localisation. Also not built: OCR for scanned PDFs, which are
-rejected with a clear message, and QCBS scoring, where a QCBS tender shows a warning and a price-ordered list.
+label: *Draft* → *Under Evaluation* on first bid), audit trail, exports, consortium/JV evaluation (an enclosed JV
+agreement is flagged for the evaluator; partners' credentials are not combined), cross-tender intelligence, EN/MR localisation of the UI. Also not built: the financial envelope
+(quoted price / percentage rate), and QCBS scoring, where a QCBS tender shows a warning and a price-ordered list.
 
 ## Deviations from the FSD to note
 

@@ -3,7 +3,7 @@ import GavelRoundedIcon from '@mui/icons-material/GavelRounded';
 import { Box, Chip, IconButton, Popover, Stack, Typography } from '@mui/material';
 import { pdfLinks } from '../api/client';
 import type { BidderSummary, Criterion, Evidence, VerdictCell } from '../api/types';
-import { tokens, verdictStyle } from '../theme';
+import { notGateStyle, tokens, verdictLook, verdictStyle } from '../theme';
 import { requirementHref } from './BundlePanels';
 import { CitationTag } from './CitationTag';
 
@@ -77,7 +77,8 @@ function NotFoundCard({ title, detail }: { title: string; detail: string }) {
 /** The demo moment: tender requirement and bidder evidence side by side, both page-cited (FSD 7.3 UI-02). */
 export function DualCitationPopover({ anchorEl, onClose, cell, criterion, bidder, tenderId }: Props) {
   const open = Boolean(anchorEl && cell && criterion && bidder);
-  const style = cell ? verdictStyle[cell.verdict] : verdictStyle.pass;
+  const gating = criterion?.gating ?? true;
+  const style = cell ? verdictLook(cell.verdict, gating) : verdictStyle.pass;
   const pages = bidder?.document?.page_count;
 
   return (
@@ -145,6 +146,11 @@ export function DualCitationPopover({ anchorEl, onClose, cell, criterion, bidder
               <ColumnTitle>{cell.evidence.length > 1 ? `Bidder evidence (${cell.evidence.length} statements)` : 'Bidder evidence'}</ColumnTitle>
               <Stack spacing={1.25}>
                 {cell.evidence.map((ev, i) => <EvidenceCard key={`${ev.page}-${i}`} ev={ev} />)}
+                {!gating && !cell.evidence.length && cell.unknown_kind !== 'not_found' && (
+                  <Box sx={{ border: `1px dashed ${notGateStyle.border}`, bgcolor: tokens.subtle, borderRadius: 2, p: '12px 14px' }}>
+                    <Typography sx={{ fontSize: 13, color: notGateStyle.fg, lineHeight: 1.5 }}>Nothing to check in the submission at this stage.</Typography>
+                  </Box>
+                )}
                 {cell.unknown_kind === 'not_found' && (
                   <NotFoundCard
                     title={cell.evidence.length ? 'Partly not found in submission' : 'Not found in submission'}
@@ -156,7 +162,12 @@ export function DualCitationPopover({ anchorEl, onClose, cell, criterion, bidder
           </Box>
 
           <Box sx={{ px: 3, pb: 2.5 }}>
-            {cell.verdict === 'unknown' && cell.unknown_kind && UNKNOWN_NOTE[cell.unknown_kind] && (
+            {!gating && cell.verdict !== 'pass' && (
+              <Box sx={{ fontSize: 13, color: notGateStyle.fg, bgcolor: notGateStyle.bg, border: `1px solid ${notGateStyle.border}`, borderRadius: 1.5, px: 1.75, py: 1.25, mb: 1.5 }}>
+                Not an eligibility gate — recorded for the committee; it does not change this bidder&apos;s standing.
+              </Box>
+            )}
+            {gating && cell.verdict === 'unknown' && cell.unknown_kind && UNKNOWN_NOTE[cell.unknown_kind] && (
               <Box sx={{ fontSize: 13, color: verdictStyle.unknown.fg, bgcolor: verdictStyle.unknown.bg, border: `1px solid ${verdictStyle.unknown.border}`, borderRadius: 1.5, px: 1.75, py: 1.25, mb: 1.5 }}>
                 {UNKNOWN_NOTE[cell.unknown_kind]}
               </Box>

@@ -4,15 +4,15 @@ import { Busy, PageTitle, Panel } from '../components/common';
 import { VerdictMatrix } from '../components/VerdictMatrix';
 import { useEvaluation } from '../hooks/useEvaluation';
 import { useTender } from '../hooks/useTender';
-import { tokens, verdictStyle, type Verdict } from '../theme';
+import { notGateStyle, tokens, verdictStyle, type Verdict } from '../theme';
 
 export function Legend() {
   return (
     <Stack direction="row" spacing={1.75} sx={{ fontSize: 12.5, color: tokens.muted }}>
-      {(['pass', 'fail', 'unknown'] as Verdict[]).map((v) => (
-        <Stack key={v} direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
-          <Box sx={{ width: 9, height: 9, borderRadius: '2px', bgcolor: verdictStyle[v].solid }} />
-          <span>{verdictStyle[v].label}</span>
+      {[...(['pass', 'fail', 'unknown'] as Verdict[]).map((v) => verdictStyle[v]), notGateStyle].map((s) => (
+        <Stack key={s.label} direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+          <Box sx={{ width: 9, height: 9, borderRadius: '2px', bgcolor: s.solid }} />
+          <span>{s.label}</span>
         </Stack>
       ))}
     </Stack>
@@ -28,7 +28,11 @@ export function VerdictsPage() {
   if (error) return <Alert severity="error">{error}</Alert>;
   if (!data) return <Busy title="Loading verdicts…" />;
 
-  const counts = data.verdicts.reduce((acc, v) => ({ ...acc, [v.verdict]: (acc[v.verdict] ?? 0) + 1 }), {} as Record<string, number>);
+  const gating = new Map(data.criteria.map((c) => [c.id, c.gating]));
+  const counts = data.verdicts.reduce((acc, v) => {
+    const key = v.verdict !== 'pass' && gating.get(v.criterion_id) === false ? 'not_gate' : v.verdict;
+    return { ...acc, [key]: (acc[key] ?? 0) + 1 };
+  }, {} as Record<string, number>);
 
   return (
     <Box sx={{ animation: 'te-fade-in 0.3s ease' }}>
@@ -48,7 +52,7 @@ export function VerdictsPage() {
       </Panel>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' }, justifyContent: 'space-between', mt: 2.5 }}>
         <Typography sx={{ fontSize: 13, color: tokens.muted }}>
-          {data.verdicts.length} verdicts · {counts.pass ?? 0} pass · {counts.fail ?? 0} fail · {counts.unknown ?? 0} unknown ·
+          {data.verdicts.length} verdicts · {counts.pass ?? 0} pass · {counts.fail ?? 0} fail · {counts.unknown ?? 0} unknown ·{counts.not_gate ? ` ${counts.not_gate} not a gate ·` : ''}{' '}
           every criterion evaluated for every bidder, even after a failed gate
         </Typography>
         <Button variant="contained" onClick={() => navigate(`/tenders/${tender.id}/comparison`)}>

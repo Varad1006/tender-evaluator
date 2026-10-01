@@ -40,7 +40,7 @@ _BARE = re.compile(
     r"\s*(?:/-|/–)?\s*$",
     re.IGNORECASE,
 )
-_FY_CELL = re.compile(r"^\s*(?:F\.?\s?Y\.?\s*)?(?P<y1>(?:19|20)\d{2})\s*[-–—/]\s*(?P<y2>(?:19|20)\d{2}|\d{2})\s*$")
+_FY_CELL = re.compile(r"^\s*(?:[•o·*\-]\s*)?(?:financial\s*year\s*|F\.?\s?Y\.?\s*)?(?P<y1>(?:19|20)\d{2})\s*[-–—/]\s*(?P<y2>(?:19|20)\d{2}|\d{2})\s*$", re.I)
 
 # A number that is plainly not an amount, even though it sits in the same column as amounts.
 _NOT_AMOUNT = re.compile(r"^\s*\d{1,3}(?:\.\d+)?\s*(?:year|yr|month|nos?|%)?\s*$", re.IGNORECASE)
@@ -54,9 +54,24 @@ class YearValue:
     label: str | None  # the row or column heading the figure sat under
 
 
-def cell_amount(text: str) -> float | None:
-    """Rupees stated by a bare table cell, or None when the cell is not an amount."""
+_UNIT_HEAD = re.compile(r"(?P<lakh>lakh|lacs?\b|लक्ष|लाख)|(?P<crore>crore|\bcr\.?\b|कोटी)", re.IGNORECASE)
+_SMALL = re.compile(r"^\s*(?P<n>\d{1,5}(?:\.\d+)?)\s*$")
+
+
+def unit_of(label: str | None) -> float:
+    """1, 1e5 or 1e7: the unit a column heading states its figures in ("Turnover (Fig in Lakhs)")."""
+    m = _UNIT_HEAD.search(label or "")
+    if not m:
+        return 1.0
+    return 100_000.0 if m.group("lakh") else 10_000_000.0
+
+
+def cell_amount(text: str, unit: float = 1.0) -> float | None:
+    """Rupees stated by a bare table cell, or None when the cell is not an amount. With a unit from
+    the heading, "271.42" under "(Fig in Lakhs)" is ₹2,71,42,000."""
     t = (text or "").strip()
+    if unit > 1 and _SMALL.match(t):
+        return float(_SMALL.match(t).group("n")) * unit
     if not t or _NOT_AMOUNT.match(t):
         return None
     m = _BARE.match(t)
@@ -68,8 +83,12 @@ def cell_amount(text: str) -> float | None:
         return None
 
 
+_FY_AY = re.compile(r"^\s*F\.?\s?Y\.?\s*(?P<y1>(?:19|20)\d{2})\s*[-–—/]\s*(?P<y2>(?:19|20)\d{2}|\d{2})\s*(?:A\.?\s?Y\.?.*)?$", re.I)
+
+
 def cell_year(text: str) -> int | None:
-    m = _FY_CELL.match((text or "").strip())
+    t = (text or "").strip()
+    m = _FY_CELL.match(t) or _FY_AY.match(t)  # "F. Y. 2024-25 A. Y. 2025-26": the financial year, not the assessment year
     return fy_start(m.group("y1"), m.group("y2")) if m else None
 
 
@@ -106,6 +125,22 @@ def read_year_series(tables: list[list[list[str]]], want: re.Pattern | None = No
             cells = [(c or "").strip() for c in row]
             years = [(i, cell_year(c)) for i, c in enumerate(cells) if cell_year(c) is not None]
             amounts = [(i, cell_amount(c)) for i, c in enumerate(cells) if cell_amount(c) is not None]
+            if len(years) == 2 and years[1][1] == years[0][1] + 1:
+                years = years[:1]  # "2021-2022 | 2022-2023": the financial year, then its assessment year
+            if len(amounts) > 1:
+                # Government + private = total: the same figure twice is one figure; otherwise the
+                # column headed "total" (anywhere in the heading rows) is the one that answers.
+                distinct = {v for _, v in amounts}
+                heads = [" ".join((r[i] or "") for r in rows[:3] if i < len(r)) for i in range(len(cells))]
+                total = [(i, v) for i, v in amounts if re.search(r"total", heads[i], re.I)]
+                amounts = amounts[-1:] if len(distinct) == 1 else (total[-1:] if total else amounts)
+            if len(years) == 1 and not amounts:
+                # A figure in lakhs is too small to be money on its own; its heading says what it is.
+                for i, c in enumerate(cells):
+                    unit = unit_of(head[i] if i < len(head) else "")
+                    if unit > 1 and i != years[0][0] and cell_amount(c, unit) is not None:
+                        amounts = [(i, cell_amount(c, unit))]
+                        break
             if len(years) == 1 and len(amounts) == 1:
                 acol = amounts[0][0]
                 column_head = head[acol] if acol < len(head) else ""
@@ -128,10 +163,11 @@ def read_year_series(tables: list[list[list[str]]], want: re.Pattern | None = No
             label = _label_of(row)
             if not keep(label):
                 continue
+            unit = unit_of(label) if unit_of(label) > 1 else unit_of(" ".join(rows[head_idx]))
             for i, year in col_year.items():
                 if i >= len(cells):
                     continue
-                value = cell_amount(cells[i])
+                value = cell_amount(cells[i], unit)
                 if value is not None:
                     out.append(YearValue(year, value, cells[i], label))
 
@@ -146,6 +182,6 @@ def read_year_series(tables: list[list[list[str]]], want: re.Pattern | None = No
 
 
 # Labels for the figure a bidder reported, and for the ones an accountant computed from it.
-TURNOVER_LABEL = re.compile(r"turn\s?over|gross\s+receipt|revenue|amount\s*\(", re.IGNORECASE)
+TURNOVER_LABEL = re.compile(r"turn\s?over|gross\s+receipt|contract\s+receipt|receipts|revenue|amount\s*\(", re.IGNORECASE)
 WORK_DONE_LABEL = re.compile(r"amount\s+of\s+work|work\s+done|value\s+of\s+(?:civil\s+)?work", re.IGNORECASE)
 DERIVED_LABEL = re.compile(r"updat|factor|escalat|multipl|weightage", re.IGNORECASE)

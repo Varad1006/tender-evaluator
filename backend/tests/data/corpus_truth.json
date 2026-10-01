@@ -57,11 +57,14 @@
     "value": 423700
    },
    "pmc_registration": {},
-   "no_joint_venture": {},
    "pmc_emd": {
     "value": 4237
    }
-  }
+  },
+  "must_not": [
+   "no_joint_venture"
+  ],
+  "_jv_note": "Corrected Oct 2026: the bundle never prohibits joint ventures. TERMS.pdf p.10 lists a JV agreement's defects among points to clarify, and p.9 names JVs among entities that can be blacklisted; both imply JVs may bid. The earlier entry recorded the old reader's misreading of that mention."
  },
  "work_2288563": {
   "facts": {
@@ -519,6 +522,144 @@
   "must_not_labels": [
    "Valid CMMi…",
    "Valid ISO…"
+  ]
+ },
+ "work_2293837": {
+  "_source": "PMC Zone-1 (Dhole Patil Road) bundle: 2492026DABS.pdf (item-wise tender abstract), BASICCIVILTANDC.pdf (PMC's tender-procedure circular, 18 scanned Marathi pages, identical in the three Zone-1 bundles) and BOQ_2293837.xls. No completion period is printed anywhere, so the turnover threshold has no number; the circular states EMD as a rule (1% up to ₹1.5 Cr), escalation as 10% per year, and mentions joint ventures only in a list of points to clarify — it does not prohibit them.",
+  "facts": {
+   "ref_no": "PMC/ZONE-1/2026/DHOLEPATIL/249",
+   "estimated_cost": 844956
+  },
+  "title_contains": "PANDHARA GANAPATI",
+  "award": "L1",
+  "criteria": {
+   "pmc_emd": {
+    "value": 8450,
+    "status": "located"
+   },
+   "pmc_max_turnover": {
+    "status": "located",
+    "no_value": true,
+    "index_rate": 0.1
+   },
+   "pmc_similar_works": {
+    "options": [
+     337982.4,
+     422478.0,
+     675964.8
+    ],
+    "status": "located",
+    "index_rate": 0.1
+   },
+   "pmc_bid_capacity": {
+    "value": 844956,
+    "status": "located"
+   },
+   "pmc_key_quantities": {
+    "status": "located"
+   },
+   "pmc_registration": {
+    "status": "located"
+   },
+   "bid_rate_analysis": {},
+   "bid_additional_security": {},
+   "bid_validity": {}
+  },
+  "must_not": [
+   "no_joint_venture",
+   "completion_days"
+  ]
+ },
+ "work_2293890": {
+  "_source": "PMC Zone-1 (Dhole Patil Road) bundle: 2522026DABS.pdf (item-wise tender abstract), BASICCIVILTANDC.pdf (PMC's tender-procedure circular, 18 scanned Marathi pages, identical in the three Zone-1 bundles) and BOQ_2293890.xls. No completion period is printed anywhere, so the turnover threshold has no number; the circular states EMD as a rule (1% up to ₹1.5 Cr), escalation as 10% per year, and mentions joint ventures only in a list of points to clarify — it does not prohibit them.",
+  "facts": {
+   "ref_no": "PMC/ZONE-1/2026/DHOLEPATIL/252",
+   "estimated_cost": 844999
+  },
+  "title_contains": "METRO HOTEL",
+  "award": "L1",
+  "criteria": {
+   "pmc_emd": {
+    "value": 8450,
+    "status": "located"
+   },
+   "pmc_max_turnover": {
+    "status": "located",
+    "no_value": true,
+    "index_rate": 0.1
+   },
+   "pmc_similar_works": {
+    "options": [
+     337999.6,
+     422499.5,
+     675999.2
+    ],
+    "status": "located",
+    "index_rate": 0.1
+   },
+   "pmc_bid_capacity": {
+    "value": 844999,
+    "status": "located"
+   },
+   "pmc_key_quantities": {
+    "status": "located"
+   },
+   "pmc_registration": {
+    "status": "located"
+   },
+   "bid_rate_analysis": {},
+   "bid_additional_security": {},
+   "bid_validity": {}
+  },
+  "must_not": [
+   "no_joint_venture",
+   "completion_days"
+  ]
+ },
+ "work_2293934": {
+  "_source": "PMC Zone-1 (Dhole Patil Road) bundle: 2602026DABS.pdf (item-wise tender abstract), BASICCIVILTANDC.pdf (PMC's tender-procedure circular, 18 scanned Marathi pages, identical in the three Zone-1 bundles) and BOQ_2293934.xls. No completion period is printed anywhere, so the turnover threshold has no number; the circular states EMD as a rule (1% up to ₹1.5 Cr), escalation as 10% per year, and mentions joint ventures only in a list of points to clarify — it does not prohibit them.",
+  "facts": {
+   "ref_no": "PMC/ZONE-1/2026/DHOLEPATIL/260",
+   "estimated_cost": 844988
+  },
+  "title_contains": "WELLESLEY ROAD",
+  "award": "L1",
+  "criteria": {
+   "pmc_emd": {
+    "value": 8450,
+    "status": "located"
+   },
+   "pmc_max_turnover": {
+    "status": "located",
+    "no_value": true,
+    "index_rate": 0.1
+   },
+   "pmc_similar_works": {
+    "options": [
+     337995.2,
+     422494.0,
+     675990.4
+    ],
+    "status": "located",
+    "index_rate": 0.1
+   },
+   "pmc_bid_capacity": {
+    "value": 844988,
+    "status": "located"
+   },
+   "pmc_key_quantities": {
+    "status": "located"
+   },
+   "pmc_registration": {
+    "status": "located"
+   },
+   "bid_rate_analysis": {},
+   "bid_additional_security": {},
+   "bid_validity": {}
+  },
+  "must_not": [
+   "no_joint_venture",
+   "completion_days"
   ]
  }
 }

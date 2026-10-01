@@ -148,6 +148,11 @@ def expand(uploads: list[tuple[str, Path]], workdir: Path) -> tuple[list[BundleF
     warnings: list[str] = []
     total = 0
     seen_hashes: dict[str, str] = {}
+    # Extracted members come back as resolved paths; compare them against a resolved folder, or a
+    # workdir under a symlink (macOS /var → /private/var) makes every archive member "outside" it.
+    workdir = Path(workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    workdir = workdir.resolve()
 
     def visit(name: str, path: Path, origin: str, depth: int) -> None:
         nonlocal total

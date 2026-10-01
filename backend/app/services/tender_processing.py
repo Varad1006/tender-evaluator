@@ -89,7 +89,9 @@ def _scan_only(scans: list[PageScan]) -> ParsedDocument:
                           sentences=[])
 
 
-def local_pass(files: list[BundleFile], ids: list[str] | None = None) -> list[ProcessedDoc]:
+def local_pass(files: list[BundleFile], ids: list[str] | None = None, role: str = "tender") -> list[ProcessedDoc]:
+    """role="bidder": a bid's files have no tender roles and any page may carry evidence, so every
+    document is structurally parsed (its type is decided per page later, by bidder_documents)."""
     docs: list[ProcessedDoc] = []
     for i, f in enumerate(files):
         doc = ProcessedDoc(ids[i] if ids else str(uuid.uuid4()), f.name, f.origin, f.path, "other", file_sha256(f.path))
@@ -99,14 +101,15 @@ def local_pass(files: list[BundleFile], ids: list[str] | None = None) -> list[Pr
         else:
             try:
                 doc.scans = quick_scan(f.path)
-                doc.doc_type = classify_document(f.name, "\n".join(s.text for s in doc.scans[:2]), len(doc.scans))
+                doc.doc_type = "bid" if role == "bidder" else \
+                    classify_document(f.name, "\n".join(s.text for s in doc.scans[:2]), len(doc.scans))
             except UnreadablePDF as exc:
                 doc.error = str(exc)
         docs.append(doc)
 
     # Structural parse only where requirements live, and only on pages with a usable text layer.
     todo = [(d, [s.number for s in d.scans if s.quality.kind in ("english", "marathi")])
-            for d in docs if d.scans and d.doc_type not in NON_ELIGIBILITY_TYPES]
+            for d in docs if d.scans and (role == "bidder" or d.doc_type not in NON_ELIGIBILITY_TYPES)]
     todo = [(d, pages) for d, pages in todo if pages]
     for d in docs:
         if d.scans and d.parsed is None:
@@ -141,17 +144,24 @@ def _mixed_devanagari(text: str) -> bool:
     return dev >= 150
 
 
+def ocr_pages(d: ProcessedDoc) -> list[tuple[int, str]]:
+    """(page, mode) for each page of one document that the local tier could not read."""
+    out = []
+    for s in d.scans:
+        if not s.scanned and len(s.text.strip()) < 150:
+            continue  # a vector page with almost no text is blank (letterhead/footer only): nothing to read
+        if s.quality.kind in NEEDS_OCR or (s.quality.kind == "english" and _mixed_devanagari(s.text)):
+            out.append((s.number, settings.OCR_MODE_SCANNED if s.scanned else settings.OCR_MODE_VECTOR))
+    return out
+
+
 def plan_ocr_all(docs: list[ProcessedDoc]) -> list[tuple[ProcessedDoc, int, str]]:
     candidates = []
     for order, d in enumerate(docs):
         if d.doc_type not in OCR_PRIORITY or not d.scans:
             continue
-        for s in d.scans:
-            if not s.scanned and len(s.text.strip()) < 150:
-                continue  # a vector page with almost no text is blank (letterhead/footer only): nothing to read
-            if s.quality.kind in NEEDS_OCR or (s.quality.kind == "english" and _mixed_devanagari(s.text)):
-                mode = settings.OCR_MODE_SCANNED if s.scanned else settings.OCR_MODE_VECTOR
-                candidates.append((OCR_PRIORITY[d.doc_type], order, s.number, d, mode))
+        for page, mode in ocr_pages(d):
+            candidates.append((OCR_PRIORITY[d.doc_type], order, page, d, mode))
     candidates.sort(key=lambda c: c[:3])
     return [(d, page, mode) for *_, page, d, mode in candidates]
 
@@ -226,8 +236,9 @@ def apply_ocr(doc: ProcessedDoc, pages: list[OcrPage]) -> None:
     doc.parsed.sentences = sorted(kept, key=lambda s: s.page)
 
 
-def run_ocr(docs: list[ProcessedDoc], ocr: DatalabOcr, on_progress=None) -> tuple[int, int, list[str]]:
-    plan = plan_ocr(docs)
+def run_ocr(docs: list[ProcessedDoc], ocr: DatalabOcr, on_progress=None,
+            plan: list[tuple[ProcessedDoc, int, str]] | None = None) -> tuple[int, int, list[str]]:
+    plan = plan_ocr(docs) if plan is None else plan
     if not plan:
         return 0, 0, []
     todo, cached = [], 0

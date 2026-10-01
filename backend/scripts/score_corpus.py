@@ -3,9 +3,10 @@
     uv run python scripts/corpus_report.py "/path/to/Dataset Tenders" --ocr --json /tmp/report.json
     uv run python scripts/score_corpus.py /tmp/report.json [tests/data/corpus_truth.json]
 
-Checks, per tender: each fact value, title/award, each expected criterion (present, threshold
-value, similar-works options, key-quantity items, personnel years), required checklist labels, and
-criteria that must NOT be extracted. Prints every miss and an overall accuracy.
+Checks, per tender: each fact value, title/award, each expected criterion (present, located or
+derived, threshold value — or none where an input is missing — similar-works options, key-quantity
+items, personnel years, escalation rate), required checklist labels, and criteria that must NOT be
+extracted. Prints every miss and an overall accuracy.
 """
 
 from __future__ import annotations
@@ -81,6 +82,14 @@ def score_tender(out: dict, truth: dict) -> tuple[int, list[str]]:
                 hit = next((i for i in got_items if name.lower() in i["item"].lower()), None)
                 check(hit is not None and _close(hit["qty"], qty, tol=0.001),
                       f"{key} item {name}: want {qty}, got {hit['qty'] if hit else None} (items {[i['item'] for i in got_items]})")
+        if "status" in want:
+            check(c["status"] == want["status"], f"{key} status: want {want['status']}, got {c['status']}")
+        if want.get("no_value"):
+            check(c["value"] is None, f"{key} must state no number (an input it needs is not in the bundle), got {c['value']}")
+        if "index_rate" in want:
+            got_rate = c["params"].get("index_rate")
+            check(got_rate is not None and abs(got_rate - want["index_rate"]) < 0.005,
+                  f"{key} escalation rate: want {want['index_rate']}, got {got_rate}")
         if "min_years" in want:
             check(c["params"].get("min_years") == want["min_years"],
                   f"{key} min_years: want {want['min_years']}, got {c['params'].get('min_years')}")

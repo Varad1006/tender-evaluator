@@ -10,7 +10,7 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,7 +20,7 @@ from app.config import settings
 from app.config.models import roles
 from app.db import get_session
 from app.models import Bidder, BidderDocument, Tender, TenderDocument
-from app.services import pipeline
+from app.services import jobs, pipeline
 
 router = APIRouter(prefix="/api/v1")
 
@@ -49,10 +49,6 @@ async def _read_upload(file: UploadFile, allowed: tuple[str, ...] = (".pdf",)) -
     if not any(content.startswith(m) for m in MAGIC.get(suffix, (b"%PDF",))):
         raise ApiError(400, "VAL_001", f"{file.filename}: the file content does not match its type.")
     return content
-
-
-async def _read_pdf(file: UploadFile) -> bytes:
-    return await _read_upload(file, (".pdf",))
 
 
 def _safe_name(name: str | None) -> str:
@@ -92,7 +88,7 @@ def list_tenders(session: Session = Depends(get_session)):
 
 
 @router.post("/tenders", status_code=201)
-async def create_tender(background: BackgroundTasks, files: list[UploadFile] | None = File(None),
+async def create_tender(files: list[UploadFile] | None = File(None),
                         file: UploadFile | None = File(None), session: Session = Depends(get_session)):
     """A tender is a bundle: notice PDF, conditions PDFs, BOQ .xls, or the zip/rar MahaTender provides."""
     uploads = [f for f in (files or []) + ([file] if file else []) if f is not None]
@@ -114,7 +110,7 @@ async def create_tender(background: BackgroundTasks, files: list[UploadFile] | N
                     status="Draft", extraction_status="pending")
     session.add(tender)
     session.commit()
-    background.add_task(pipeline.process_tender, tender_id)
+    jobs.submit(pipeline.process_tender, tender_id)
     return ok({"id": tender_id, "status": tender.status}, "Tender created")
 
 
@@ -161,29 +157,36 @@ def tender_document_file(document_id: str, session: Session = Depends(get_sessio
 
 
 @router.post("/tenders/{tender_id}/bidders", status_code=201)
-async def add_bidder(tender_id: str, background: BackgroundTasks, file: UploadFile = File(...),
-                     bidder_name: str | None = Form(None), session: Session = Depends(get_session)):
+async def add_bidder(tender_id: str, files: list[UploadFile] | None = File(None),
+                     file: UploadFile | None = File(None), bidder_name: str | None = Form(None),
+                     session: Session = Depends(get_session)):
+    """A bid is a bundle: the portal's envelope (Fee_PreQual_Technical_<bid id>.zip, holding the EMD
+    receipt and the merged document scan), a RAR, or the PDFs themselves."""
     tender = _tender_or_404(session, tender_id)
     if tender.extraction_status != "ready":
         raise ApiError(409, "LIFECYCLE_001", "Tender criteria must be extracted before adding bidders.")
-    content = await _read_pdf(file)
+    uploads = [f for f in (files or []) + ([file] if file else []) if f is not None]
+    if not uploads:
+        raise ApiError(400, "VAL_001", "Upload the bid's files (the envelope zip, or its PDFs).")
+    contents = [(f, await _read_upload(f, (".pdf", ".zip", ".rar"))) for f in uploads]
 
-    bidder = Bidder(tender_id=tender.id, bidder_name=(bidder_name or "").strip())
+    from app.services.bidder_processing import bid_ref_from_names
+
+    names = [_safe_name(f.filename) for f, _ in contents]
+    bidder = Bidder(tender_id=tender.id, bidder_name=(bidder_name or "").strip(), bid_ref=bid_ref_from_names(names))
     session.add(bidder)
     session.flush()
-    folder = pipeline.bidder_dir(tender.id, bidder.id)
+    folder = pipeline.bidder_uploads_dir(tender.id, bidder.id)
     folder.mkdir(parents=True, exist_ok=True)
-    doc = BidderDocument(bidder_id=bidder.id, doc_type="combined", file_name=_safe_name(file.filename), file_path="")
-    session.add(doc)
-    session.flush()
-    path = folder / f"{doc.id}.pdf"
-    path.write_bytes(content)
-    doc.file_path = str(path)
+    for name, (_, content) in zip(names, contents):
+        while (folder / name).exists():
+            name = f"_{name}"
+        (folder / name).write_bytes(content)
     if tender.status == "Draft":  # FSD 7.7: first bidder document moves the tender to Under Evaluation
         tender.status = "Under Evaluation"
     session.commit()
-    background.add_task(pipeline.process_bidder, bidder.id)
-    return ok({"id": bidder.id}, "Bidder document uploaded")
+    jobs.submit(pipeline.process_bidder, bidder.id)
+    return ok({"id": bidder.id}, "Bid uploaded")
 
 
 @router.delete("/bidders/{bidder_id}")

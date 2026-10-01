@@ -71,7 +71,9 @@ FACT_LABELS = {
     "pre_bid_meeting": ("Pre-bid meeting", "text"),
 }
 
-_REF = re.compile(r"\bPMC/[A-Z0-9][A-Z0-9\-]*(?:/[A-Z0-9\-]+)*/20\d\d/\d+\b")
+# "PMC/ROAD/2026/235", and zone tenders "PMC/ZONE-3/2026-27/WARJE-KARVENAGAR/4" (financial year,
+# then the office). A space after a slash is a line break or an OCR artefact.
+_REF = re.compile(r"\bPMC/[A-Z0-9][A-Z0-9\-]*(?:/[A-Z0-9\-]+)*?/20\d\d(?:-\d{2})?(?:/ ?[A-Z][A-Z0-9\-]*)*/\d+\b")
 _NUM = r"(\d[\d,]*(?:\.\d+)?)"
 _DEV_DIGITS = str.maketrans("०१२३४५६७८९", "0123456789")
 _DEV = re.compile(r"[\u0900-\u097F]")
@@ -159,7 +161,7 @@ class FactCollector:
         add = lambda k, v, q, m: self.add(k, v, doc_id, doc_name, page, q, m)  # noqa: E731
 
         for ref in dict.fromkeys(_REF.findall(raw)):
-            add("ref_no", ref, _line_with(raw, ref), "reference")
+            add("ref_no", ref.replace(" ", ""), _line_with(raw, ref), "reference")
 
         # Tender Notice box (portal generated): contract type / completion / rainy season, then four amounts.
         m = re.search(r"Type of Contract:.*?Rainy Season:.*?\n\s*(B-?\d)\s+(\d+)\s+(Included|Excluded)", raw, re.S | re.I)
@@ -204,9 +206,10 @@ class FactCollector:
         if mm:
             add("department", mm.group(1).title(), mm.group(0), "Invitation")
 
-        # B-1 form row: 9 "n/-" amounts then time limit, DLP and cost of tender document.
-        mm = re.search(r"((?:\d+/-\s+){9})(\d+)\s+(\d+)\s+(\d+)", raw)
-        if mm and "B-1" in raw:
+        # B-1 form row: 9 "n/-" amounts then time limit, DLP and cost of tender document. OCR gives the
+        # same row as a table ("| 7994450/- | 6774958/- | … | 12 | 12 | 6079"), on the page after "B-1 Form".
+        mm = re.search(r"((?:\d+/-\s*\|?\s*){9})(\d+)\s*\|?\s*(\d+)\s*\|?\s*(\d+)", raw)
+        if mm and ("B-1" in raw or (re.search(r"earnest\s*money", raw, re.I) and re.search(r"security\s*deposit", raw, re.I))):
             amounts = [_num(a) for a in re.findall(r"(\d+)/-", mm.group(1))]
             q = mm.group(0)
             add("total_estimated_cost", amounts[0], q, "B-1 form")

@@ -125,8 +125,11 @@ labels). `scripts/score_corpus.py` scores a `corpus_report.py --json` run agains
 cache offline and fails on any miss. A tender in the ground truth but not in this machine's corpus
 folder is skipped rather than counted as a miss, so the truth can grow ahead of any one download.
 
-Current: **243 / 243** on the original 13 tenders + RFP, and **54 / 54** on the three added in
-Sep 2026 (work_2286446, PCMC encroachment RFP, PMC DBT RFP).
+Current: **243 / 243** on the original 13 tenders + RFP, **54 / 54** on the three added in
+Sep 2026 (work_2286446, PCMC encroachment RFP, PMC DBT RFP), and **81 / 81** on three PMC Zone-1
+bundles added in Oct 2026 (work_2293837, work_2293890, work_2293934). Besides values, the scorer
+checks that a criterion is located rather than derived, that the escalation rate is carried, and
+that a threshold states no number when an input it needs is missing from the bundle.
 
 The three added tenders score **51 / 54 from the local text layer alone**. The hybrid tier closes
 the gap: work_2286446's key BOQ quantities are handwritten on a scanned data-sheet page, and
@@ -146,6 +149,73 @@ exposes a bug gets a row there, not a patch to the reader.
 | local tier per bundle | 0.1–7.5 s | same |
 | OCR per bundle | 14–105 s (3–62 pages) | ~0.1 s |
 | criteria located & quoted | local only: 74 / 120 (+17 cited in Marathi, 29 derived) | hybrid: **188 / 188** (139 criteria + 49 documents) |
+
+# Bid envelopes — the same hybrid pipeline, read for evidence
+
+A MahaTender bid arrives as `Fee_PreQual_Technical_<bid id>.zip`: the portal's EMD receipt plus the
+bidder's documents, usually merged into one scanned PDF of 50–300 pages. On the first ten envelopes
+(1,470 pages), **93 % of pages were image scans**, so for bids OCR is the main road, not the fallback.
+
+```
+upload envelope(s)   one zip = one bidder (several files per bidder allowed; .pdf/.zip/.rar)
+   │                 the bid id is read from the file name
+   ▼
+1. LOCAL TIER        bundle.expand + local_pass(role="bidder"): same quick scan and readability classes
+   ▼
+2. PAGE TYPING       21 document types, English and Marathi, decided by the page's heading
+   │                 (first ~700 chars) — a passing mention elsewhere does not type a page.
+   │                 Sworn statements (हमीपत्र / प्रतिज्ञापत्र / affidavit) are typed first: they
+   │                 restate every criterion. A continuation page inherits its predecessor's type.
+   ▼
+3. OCR TIER          every unreadable page, plus scanned English pages whose amounts are corrupt
+   │                 and every turnover / bid-capacity certificate (their figures decide verdicts);
+   │                 capped per bid (TE_OCR_MAX_PAGES_PER_BIDDER, 300); pages left unread are listed
+   ▼
+4. EVIDENCE          one finder per criterion, over the pages of the right type first
+   │                 → claims, each with page + verbatim quote + detail used by the rule
+   ▼
+5. VERDICTS          evaluation.py — arithmetic in code, one handler per PMC criterion
+```
+
+## Verdict rules for PMC works criteria
+
+| criterion | rule |
+|---|---|
+| EMD | paid for **this** tender (reference checked), payment status success, amount ≥ the tender's with ₹1 of rounding |
+| Registration | any registration valid **on the bid date** whose class covers the estimated cost; the bid date comes from the EMD receipt, else the latest bid date among the tender's bids |
+| Bid capacity | recomputed as `A × N × 1.5 − B` from the certificate's own A and B on the tender's N. A figure written two ways, or a certificate restricted to another authority, gives `unknown` |
+| Turnover | the best year inside the tender's window; lakh / crore headings, FY and AY pairs, rupee + paise columns, "receipts" rows |
+| Similar works | the experience ladder (3 / 2 / 1 works) after indexation; value precedence **done > accepted > tender amount, never the estimate**; a certificate still running (चालू, सुरु, बाकी, running bill, < 100 %) is not a completed work; year bounds from an explicit date, else the financial year, else the tender year as a floor and the issue date as a ceiling. A work whose nature or window is uncertain makes the verdict `unknown — would qualify once confirmed`, never `fail` |
+| Key quantities | executed quantities (not the tender quantity column), from vertical or horizontal BOQ certificates; one work within the window, or a sum across works of one financial year; never `fail` on missing evidence |
+| No JV | single-firm constitution and no JV agreement |
+| Bid validity, rate analysis, additional security | **not gates**: recorded for the committee, shown neutral, never hold a bidder pending |
+
+Nature of work is judged by a bilingual family lexicon on the work's final verb clause (location
+words stripped: a work *on* a road is not a road work). A certificate in another contractor's
+name is flagged (majority name, compared within one script).
+
+## Running many bids at once
+
+* Jobs run in a pool of 2 workers (`TE_JOB_WORKERS`); uploads return immediately.
+* PDFium is not thread-safe — concurrent use crashed the process natively (`Trace/BPT trap`) —
+  so every PDFium call holds one process-wide lock.
+* SQLite in WAL mode with a 30 s busy timeout; all computation happens outside transactions,
+  which stay short (read → compute → write).
+* A job cut short by a server stop is resumed at the next start from the saved uploads (OCR pages
+  already paid for come back from the cache). A job interrupted three times in a row is failed
+  with a message instead of crash-looping.
+
+## Bid accuracy harness (local only)
+
+Bidder documents never enter the repository. Ground truth for real bids lives in
+`backend/tests/local/*_truth.json` (git-ignored): the tender, the envelopes and the verdict and
+figure range each criterion must reach, all verified by reading the pages.
+`scripts/bid_report.py` runs a tender and its envelopes through the same code as the app (OCR
+from the cache unless `--online`), `scripts/score_bids.py` scores it, and
+`tests/test_bid_corpus.py` replays it offline and skips on machines without the files.
+
+Current: **106 / 106** checks on one tender's ten envelopes. Those are the bids the rules were
+built on, so this guards against regressions; it does not yet measure accuracy on unseen bids.
 
 ## Code map
 
@@ -167,3 +237,13 @@ exposes a bug gets a row there, not a patch to the reader.
 | API job (persist local, then OCR) | `app/services/pipeline.py` (`process_tender`) |
 | corpus runner | `scripts/corpus_report.py` |
 | accuracy scorer | `scripts/score_corpus.py` + `tests/data/corpus_truth.json` |
+| bid envelope: bid id, OCR plan, identity, bid date | `app/services/bidder_processing.py` |
+| bid page typing (21 types) | `app/services/bidder_documents.py` |
+| bid evidence: EMD, registration, bid capacity, JV, key quantities | `app/services/bidder_evidence.py` |
+| completed-work certificates (tables, key-value forms, Marathi) | `app/services/work_proof.py` |
+| turnover grids | `app/services/year_tables.py` |
+| executed BOQ quantities | `app/services/key_quantities.py` |
+| nature of work | `app/services/nature.py` |
+| verdict rules | `app/services/evaluation.py` |
+| background jobs, resume | `app/services/jobs.py`, `app/services/pipeline.py` (`process_bidder`, `resume_interrupted`) |
+| bid runner + scorer | `scripts/bid_report.py`, `scripts/score_bids.py`, `tests/test_bid_corpus.py` |

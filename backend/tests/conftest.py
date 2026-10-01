@@ -6,6 +6,7 @@ from pathlib import Path
 _TMP = tempfile.mkdtemp(prefix="te-poc-tests-")
 os.environ["TE_DATA_DIR"] = _TMP
 os.environ["TE_SKIP_DOTENV"] = "1"  # tests never read local secrets or call remote OCR
+os.environ["TE_JOBS_INLINE"] = "1"  # a request returns with its background job done
 os.environ.pop("GEMINI_API_KEY", None)
 os.environ.pop("DATALAB_API_KEY", None)
 

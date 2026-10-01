@@ -98,6 +98,14 @@ class DatalabOcr:
         self._min_interval = 60.0 / max(1, requests_per_minute)
         self._rate_lock = threading.Lock()
         self._last_submit = 0.0
+        # What this instance was billed, as Datalab reports it per request (cached pages cost nothing).
+        self._usage_lock = threading.Lock()
+        self.cost_cents = 0.0
+        self.pages_billed = 0
+        self.requests = 0
+
+    def usage(self) -> dict:
+        return {"cost_cents": round(self.cost_cents, 2), "pages_billed": self.pages_billed, "requests": self.requests}
 
     # --- cache ---------------------------------------------------------------------------
     def _cache_file(self, file_hash: str, page: int, mode: str) -> Path:
@@ -157,6 +165,13 @@ class DatalabOcr:
 
     def run_job(self, job: OcrJob) -> list[OcrPage]:
         body = self._await(self._submit(job))
+        cost = body.get("total_cost")
+        if cost is None:
+            cost = (body.get("cost_breakdown") or {}).get("final_cost_cents")
+        with self._usage_lock:
+            self.cost_cents += float(cost or 0)
+            self.pages_billed += int(body.get("page_count") or 0)
+            self.requests += 1
         pages = split_pages(body.get("markdown") or "")
         if not pages and len(job.pages) == 1:
             pages = {job.pages[0]: (body.get("markdown") or "").strip()}

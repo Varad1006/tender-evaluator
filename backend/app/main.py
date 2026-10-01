@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -9,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import ApiError, router
 from app.db import init_db
-from app.services.pipeline import CrossBidderPathLeak
+from app.services.pipeline import CrossBidderPathLeak, resume_interrupted, run_jobs
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -17,6 +18,10 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    jobs = resume_interrupted()
+    if jobs:
+        logging.getLogger(__name__).info("Resuming %d job(s) interrupted by the last shutdown", len(jobs))
+        threading.Thread(target=run_jobs, args=(jobs,), name="resume-jobs", daemon=True).start()  # one after another
     yield
 
 

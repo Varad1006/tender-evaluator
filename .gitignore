@@ -10,3 +10,6 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 .DS_Store
+
+# Ground truth written from real bids (bidders' data): never committed
+backend/tests/local/

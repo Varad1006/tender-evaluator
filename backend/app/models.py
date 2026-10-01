@@ -125,9 +125,18 @@ class Bidder(Base):
     status: Mapped[str] = mapped_column(String(30), default="Registered")  # Registered|Extracting|ClaimsReady|Failed
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    # A bid is a bundle too (MahaTender: Fee_PreQual_Technical_<bid id>.zip = EMD receipt + one merged
+    # scan of every document), read locally first and refined by OCR like a tender.
+    bid_ref: Mapped[str | None] = mapped_column(String(40))  # the portal's bid id, when the upload names it
+    facts: Mapped[dict | None] = mapped_column(JSON)  # identity read from the documents: firm, constitution, ...
+    warnings: Mapped[list | None] = mapped_column(JSON)
+    ocr_status: Mapped[str | None] = mapped_column(String(20))  # not_needed|queued|running|done|failed|unavailable
+    ocr_progress: Mapped[dict | None] = mapped_column(JSON)
+    timings: Mapped[dict | None] = mapped_column(JSON)
 
     tender: Mapped[Tender] = relationship(back_populates="bidders")
-    documents: Mapped[list[BidderDocument]] = relationship(back_populates="bidder", cascade="all, delete-orphan")
+    documents: Mapped[list[BidderDocument]] = relationship(back_populates="bidder", cascade="all, delete-orphan",
+                                                           order_by="BidderDocument.position")
     extracted_values: Mapped[list[BidderExtractedValue]] = relationship(
         back_populates="bidder", cascade="all, delete-orphan"
     )
@@ -142,11 +151,18 @@ class BidderDocument(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     bidder_id: Mapped[str] = mapped_column(ForeignKey("eval_dg_bidders.id", ondelete="CASCADE"))
-    doc_type: Mapped[str] = mapped_column(String(30), default="combined")  # PoC: one combined PDF per bidder
+    doc_type: Mapped[str] = mapped_column(String(30), default="combined")  # combined | emd_receipt | ...
     file_name: Mapped[str] = mapped_column(String(255))
     file_path: Mapped[str] = mapped_column(String(500))
     page_count: Mapped[int | None] = mapped_column(Integer)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    position: Mapped[int | None] = mapped_column(Integer)
+    origin: Mapped[str | None] = mapped_column(String(500))  # "Fee_PreQual_Technical_1234567.zip › emd.pdf"
+    file_hash: Mapped[str | None] = mapped_column(String(64))
+    page_kinds: Mapped[list | None] = mapped_column(JSON)  # readability per page, as for tender documents
+    page_types: Mapped[list | None] = mapped_column(JSON)  # what each page is: turnover_certificate, pan, ...
+    ocr_modes: Mapped[dict | None] = mapped_column(JSON)
+    error: Mapped[str | None] = mapped_column(Text)
 
     bidder: Mapped[Bidder] = relationship(back_populates="documents")
 

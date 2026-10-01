@@ -41,7 +41,8 @@ export function VerdictMatrix({ evaluation, showValues = false, issuesOnly = fal
 
   const rows: Row[] = useMemo(() => {
     const criteria = evaluation.criteria.filter(
-      (c) => !issuesOnly || evaluation.bidders.some((b) => index.get(`${c.id}:${b.id}`)?.verdict !== 'pass'),
+      // An issue is something that holds a bid up; a non-gating condition never does.
+      (c) => !issuesOnly || (c.gating && evaluation.bidders.some((b) => index.get(`${c.id}:${b.id}`)?.verdict !== 'pass')),
     );
     const out: Row[] = criteria.map((c) => ({ id: c.id, criterion: c }));
     if (showValues) out.push({ id: PRICE_ROW, criterion: null });
@@ -118,6 +119,7 @@ export function VerdictMatrix({ evaluation, showValues = false, issuesOnly = fal
           <Stack spacing={0.5} sx={{ alignItems: 'center', py: 1.25, width: '100%' }}>
             <VerdictChip
               verdict={cell.verdict}
+              gating={row.criterion.gating}
               selected={open?.cell.id === cell.id}
               onClick={(e: MouseEvent<HTMLElement>) => setOpen({ anchor: e.currentTarget, cell })}
             />
