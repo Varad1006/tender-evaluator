@@ -487,16 +487,25 @@ CONCEPT_FINDERS: dict[str, Callable[[ParsedDocument, CriterionSpec], list[Claim]
 
 
 def _finder_for(spec: CriterionSpec):
-    """The finder for a criterion: by key where one is registered, else by what the clause is about."""
+    """The finder for a criterion: by key where one is registered, else by what the clause is about.
+
+    A concept finder reads a *figure*, so it is only used for a criterion that measures one. "Turn
+    Over and Net Worth Certificate" in a list of documents to enclose resolves to the turnover
+    concept perfectly well, and is still asking whether a document is in the envelope — answering it
+    with a turnover figure found on some other page is the right verdict reached for the wrong
+    reason, and the wrong verdict as soon as the figure is somewhere the certificate is not.
+    """
     by_key = FINDERS.get(spec.key)
     if by_key is not None:
         return by_key
-    from app.services.concepts import resolve
+    measures = spec.threshold_value is not None and spec.operator in (">=", "<=")
+    if measures:
+        from app.services.concepts import resolve
 
-    concept = resolve(spec.requirement or spec.label, label=spec.label,
-                      datatype="count" if spec.threshold_unit not in (None, "INR") else "currency")
-    if concept is not None and concept.key in CONCEPT_FINDERS:
-        return CONCEPT_FINDERS[concept.key]
+        concept = resolve(spec.requirement or spec.label, label=spec.label,
+                          datatype="count" if spec.threshold_unit not in (None, "INR") else "currency")
+        if concept is not None and concept.key in CONCEPT_FINDERS:
+            return CONCEPT_FINDERS[concept.key]
     return find_generic_document if spec.key.startswith("doc_") else None
 
 

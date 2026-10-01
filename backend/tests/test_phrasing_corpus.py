@@ -894,3 +894,57 @@ def test_a_bill_of_quantities_row_is_not_a_person():
     spec = CriterionSpec(key="min_staff_strength", label="Staff", operator=">=", params={},
                          threshold_value=3, threshold_unit="people", requirement=STAFF_SPEC_REQ)
     assert not [c for c in find_staff_strength(doc, spec) if c.detail.get("source") == "roster"]
+
+
+# ==============================================================================================
+# 14. Where a criterion's threshold comes from
+#
+# Nothing in this system knows what any tender requires. A criterion is recognised by the *shape*
+# of its clause and its number is read out of the clause, which is why the same recogniser yields
+# ₹4 crore on PMC's DBT RFP, ₹25 crore on MahaIT's and ₹13 lakh on PCMC's.
+# ==============================================================================================
+
+THRESHOLDS_FROM_THE_PAGE = [
+    # (clause as the tender prints it, criterion key, threshold the system must compare against)
+    ("Financials: The Bidder should have an average annual turnover of minimum of INR 4.0 Cr over "
+     "the last Three years (FY 2022-23, 2023-24 and 2024-25).", "avg_turnover", 4_00_00_000.0),
+    ("The Bidder should have an average annual turnover of minimum INR 25 Cr over the last three "
+     "financial years.", "avg_turnover", 25_00_00_000.0),
+    ("The Bidder shall have a minimum average annual turnover of Rs. 13,00,000 during the last "
+     "three financial years.", "avg_turnover", 13_00_000.0),
+    ("Manpower Declaration: The Bidder must have an on-roll staff strength of a minimum of 30 IT "
+     "Professionals having Core Expertise in Software Development.", "min_staff_strength", 30.0),
+    ("The Bidder must have an on-roll staff strength of at least 75 technical professionals.",
+     "min_staff_strength", 75.0),
+]
+
+
+@pytest.mark.parametrize("clause,key,threshold", THRESHOLDS_FROM_THE_PAGE)
+def test_the_threshold_is_read_out_of_the_clause(clause, key, threshold):
+    from app.adapters.pdf_parser import Sentence
+    from app.services.criteria_extraction import RULES
+
+    s = Sentence(page=1, text=clause, section="Eligibility")
+    drafts = [d for d in (rule(s) for rule in RULES) if d is not None]
+    match = next((d for d in drafts if d.key == key), None)
+    assert match is not None, f"no recogniser produced {key}"
+    assert match.threshold_value == threshold
+
+
+def test_a_document_checklist_row_is_not_given_a_figure_reader():
+    """"Turn Over and Net Worth Certificate" in a list of enclosures resolves to the turnover
+    concept perfectly well, and is still asking whether a document is in the envelope. Answering it
+    with a figure found on some other page is the right verdict for the wrong reason."""
+    from app.services.bidder_extraction import CriterionSpec, _finder_for, find_generic_document
+
+    enclosure = CriterionSpec(key="doc_turn_over_and_net_worth_certificate",
+                              label="Turn Over and Net Worth Certificate", operator="exists",
+                              params={}, requirement="9. Turn Over and Net Worth Certificate")
+    assert _finder_for(enclosure) is find_generic_document
+
+    measured = CriterionSpec(key="avg_turnover_2", label="Minimum Average Annual Turnover",
+                             operator=">=", params={}, threshold_value=4_00_00_000.0,
+                             threshold_unit="INR",
+                             requirement="The Bidder should have an average annual turnover of "
+                                         "minimum of INR 4.0 Cr over the last Three years")
+    assert _finder_for(measured) is not find_generic_document
