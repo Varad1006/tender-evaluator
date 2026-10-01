@@ -935,16 +935,203 @@ def test_a_document_checklist_row_is_not_given_a_figure_reader():
     """"Turn Over and Net Worth Certificate" in a list of enclosures resolves to the turnover
     concept perfectly well, and is still asking whether a document is in the envelope. Answering it
     with a figure found on some other page is the right verdict for the wrong reason."""
-    from app.services.bidder_extraction import CriterionSpec, _finder_for, find_generic_document
+    from app.services.bidder_extraction import (
+        CriterionSpec, _finder_for, find_concept_presence, find_turnover_concept,
+    )
 
     enclosure = CriterionSpec(key="doc_turn_over_and_net_worth_certificate",
                               label="Turn Over and Net Worth Certificate", operator="exists",
                               params={}, requirement="9. Turn Over and Net Worth Certificate")
-    assert _finder_for(enclosure) is find_generic_document
+    # The presence reader, which asks whether the certificate is there — never the figure reader.
+    assert _finder_for(enclosure) is find_concept_presence
 
     measured = CriterionSpec(key="avg_turnover_2", label="Minimum Average Annual Turnover",
                              operator=">=", params={}, threshold_value=4_00_00_000.0,
                              threshold_unit="INR",
                              requirement="The Bidder should have an average annual turnover of "
                                          "minimum of INR 4.0 Cr over the last Three years")
-    assert _finder_for(measured) is not find_generic_document
+    assert _finder_for(measured) is find_turnover_concept
+
+
+# ==============================================================================================
+# 15. The rest of the requirement families
+#
+# Thirty concepts now, harvested from what the five RFPs actually ask for rather than invented.
+# Every row below is a verbatim shape from a real bid or a real tender format.
+# ==============================================================================================
+
+MORE_PHRASINGS = [
+    # --- identity, proved by a number only one issuer can mint ---
+    ("pan", "eccan Station, Deccan Gymkhana, Pune - 471.004 (PAN BZSPB8994G ) were as under", "identifier"),
+    ("pan", "Proprietor Mr. Amol Navnath Dudhe having PAN : AQRPD4656N, Flat No. 9", "identifier"),
+    ("gst", "Annexure A GSTIN 27BZSPB8994G1ZL Legal Name", "identifier"),
+    # A supplier's GSTIN on a purchase invoice is the supplier's, and a bid is full of them.
+    ("gst", "Date : GSTIN : 27AQRPD4656N1Z5 ConSignee (Ship To) :-", None),
+    ("msme_udyam", "UDYAM REGISTRATION NUMBER UDYAM-MH-26-0071650 NAME OF ENTERPRISE", "identifier"),
+    ("legal_entity", "U72900PN2013PTC146869 08th April 2013", "identifier"),
+
+    # --- authority to sign: the instrument, not the footer ---
+    ("signing_authority", "POWER OF ATTORNEY  I, Amit Mohol, Director, do hereby appoint", "anchor"),
+    ("signing_authority", "“RESOLVED FURTHER THAT any one of the following officers be authorised", "anchor"),
+    # "Authorised Signatory" closes every tax invoice, insurance schedule and vendor letter in a bid
+    # — nineteen of them in this corpus, on pages about cheque payment and jurisdiction.
+    ("signing_authority", "Authorised Signatory TERMS & CONDITIONS : 1.Cheque/DD in favour of Siddharth A", None),
+    ("signing_authority", "AUTHORISED SIGNATORY Note: This is computer generated copy, does not need any s", None),
+
+    # --- ESIC: the one concept where the likeliest thing on the page is a denial ---
+    ("employee_insurance", "As on date of your application, your establishment is not registered with ESIC.", None),
+    ("employee_insurance", "under section 1(3) of the esi. act, 1948 is applicable to all factories/establ", None),
+    ("employee_insurance", "A State wise list of ESI Dispensaries is available on our website www.esic.nic.in", None),
+    ("employee_insurance", "ENSURE - TO INSURE ALL ELIGIBLE WORKERS WITH ESI FOR TOTAL SOCIAL SECURITY", None),
+    ("employee_insurance", "ESIC registration certificate of the establishment is enclosed", "anchor"),
+    ("provident_fund", "your establishment is registered with Employees' Provident Fund Organisation "
+                        "with the following code number : Code Nu", "anchor"),
+
+    # --- fees, dates, accounts ---
+    ("tender_fee", "Tender Fee in | 6,579 My Bids History", "anchor"),
+    ("tender_fee", "EMD Amount in Rs : 80,000 Tender Fee", None),
+    ("firm_age", "DATE OF INCORPORATION / REGISTRATION OF ENTERPRISE 27/12/2019", "anchor"),
+    ("firm_age", "Date of commencement of business / 01/02/2013", "anchor"),
+    ("firm_age", "valid Fitness certificate, as applicable, on the date of commencement of the Policy", None),
+    ("audited_accounts", "BALANCE SHEET AS AT 31.03.2024", "anchor"),
+
+    # --- experience, as a document rather than a measured value ---
+    ("work_order", "WORK ORDER To, S.S Construction, Prop- HUSE", "anchor"),
+    ("work_order", "Total Work Portion Amount from work order 8,472,98 8,366, 2,778, 2,884,", None),
+    ("completion_certificate", "WORK COMPLETION CERTIFICATE CERTIFICATE IN RESPECT OF WORK EXECUTED BY", "anchor"),
+    ("project_experience", "Bidder’s Experience - Details of similar work undertaken", "anchor"),
+    ("project_experience", "List of completed/on-going assignments of similar nature", "anchor"),
+
+    # --- machinery: a rate-analysis line prices a roller by the hour and owns nothing ---
+    ("machinery", "83.80 P.no ROLLER 934.00 HR", None),
+    ("machinery", "o4.33 Cum Extra ITEM 1.50% ROLLER 39.00 H", None),
+    ("machinery", "List of Plant and Machinery owned by the contractor", "anchor"),
+
+    # --- declarations, each of which is itself a negative and must not suppress itself ---
+    ("not_insolvent", "We declare that we are not insolvent, in receivership or bankrupt as on the date", "anchor"),
+    ("not_insolvent", "The bidder has not been declared bankrupt by any court", "anchor"),
+    ("not_insolvent", "Self-Declaration: The Bidder should not be insolvent, in receivership or bankrupt", None),
+    ("anti_collusion", "We hereby certify and confirm that in the preparation of our bid there was no collusion", "anchor"),
+    ("no_deviation", "We certify that our offer contains no deviation either technical or commercial", "anchor"),
+    ("non_disclosure", "NON-DISCLOSURE AGREEMENT entered into between Pune Municipal Corporation and", "anchor"),
+    ("no_joint_venture", "We are submitting this bid in our own individual capacity and not as a joint venture", "anchor"),
+    ("bid_forms", "Dear Sir, I, having read and examined in detail all the bidding documents", "anchor"),
+    ("bidder_particulars", "4. Registered office address 411045", "anchor"),
+]
+
+
+@pytest.mark.parametrize("key,text,want", MORE_PHRASINGS)
+def test_how_a_bid_states_the_rest_of_the_facts(key, text, want):
+    from app.services.concepts import BY_KEY
+
+    assert BY_KEY[key].hit(text) == want
+
+
+REQUIREMENTS_TO_CONCEPTS = [
+    ("Copy of PAN", "pan"),
+    ("Copy of Goods and Services Tax Identification Number (GSTIN)", "gst"),
+    ("A Board Resolution or Power of Attorney, in the name of the person executing the bid", "signing_authority"),
+    ("Self-Declaration: The Bidder should not be insolvent, in receivership or bankrupt", "not_insolvent"),
+    ("Anti-Collusion Certificate", "anti_collusion"),
+    ("No– Deviation Certificate", "no_deviation"),
+    ("Non-Disclosure Agreement", "non_disclosure"),
+    ("Audited Balanced sheet and Profit & Loss Statements", "audited_accounts"),
+    ("Proof of Existence of Firm from last 5 years", "firm_age"),
+    ("Bid Document Fee Details Amount Reference No", "tender_fee"),
+    ("Record for poor performance such as abandoning the works", "past_performance"),
+    ("Sub-Contracting/ Consortium/ JV of companies/ firms etc. is not allowed", "no_joint_venture"),
+    ("CV of Key Professionals (Appendix-8)", "key_roles"),
+    ("List of completed/on-going assignments of similar nature (Past Experience Details)", "project_experience"),
+    ("Pre-Qualification Bid Covering letter", "bid_forms"),
+    ("General Details of the Bidder (Appendix-3)", "bidder_particulars"),
+    ("Valid certifications:- CMMI Level 3 or Higher", "quality_certification"),
+]
+
+
+@pytest.mark.parametrize("requirement,want", REQUIREMENTS_TO_CONCEPTS)
+def test_the_rest_of_the_requirements_resolve_too(requirement, want):
+    from app.services.concepts import resolve
+
+    got = resolve(requirement, label=requirement, datatype="boolean")
+    assert got is not None and got.key == want
+
+
+# ==============================================================================================
+# 16. Precision of a presence check
+#
+# Coverage bought with a bad citation is worse than no coverage: a pass whose page does not say
+# what the committee is told it says destroys trust in every other row of the grid.
+# ==============================================================================================
+
+def _doc(pages, sentences=()):
+    from app.adapters.pdf_parser import ParsedDocument, Sentence
+
+    return ParsedDocument(pages=list(pages),
+                          sentences=[Sentence(page=p, text=t, section="") for p, t in sentences])
+
+
+def _presence(label, pages, sentences=(), requirement=""):
+    from app.services.bidder_extraction import CriterionSpec, find_concept_presence
+
+    spec = CriterionSpec(key="doc_x", label=label, operator="exists", params={},
+                         requirement=requirement or label)
+    return find_concept_presence(_doc(pages, sentences), spec)
+
+
+CONTENTS = [
+    "Checklist for the documents to be included in the Pre-Qualification (PQ) Folder",
+    "Sr. No. Checklist Items Compliance(Yes/No) Page No. and Section No. in bid",
+]
+
+
+def test_a_bid_claiming_to_contain_a_certificate_is_not_the_certificate():
+    """Where the contents list is ruled, each row is a bare title with the page range in another
+    cell, so the row carries none of the marks a checklist line usually has. The page is still
+    unmistakable from its heading, and a pass cited to it is circular."""
+    rows = CONTENTS + ["Anti-Collusion Certificate", "No Deviation Certificate",
+                       "Board Resolution / Power of Attorney"]
+    page = _page(1, rows)
+    claims = _presence("Anti-Collusion Certificate", [page],
+                       [(1, "Anti-Collusion Certificate")])
+    assert claims == [], "evidence was taken from the bid's own table of contents"
+
+
+def test_the_real_declaration_is_cited_not_the_contents_row():
+    real = "We hereby certify and confirm that in the preparation of our bid there was no collusion."
+    claims = _presence("Anti-Collusion Certificate",
+                       [_page(1, CONTENTS + ["Anti-Collusion Certificate"]), _page(70, [real])],
+                       [(1, "Anti-Collusion Certificate"), (70, real)])
+    assert [c.page for c in claims] == [70]
+
+
+def test_a_roster_row_is_not_evidence_of_a_particular_role():
+    """"Diploma in Graphic Designer" on a staff roster is personnel evidence and says nothing about
+    a Database Administrator. Both criteria resolve to the same concept, so only the words of the
+    clause can separate them."""
+    roster = ["1 Rohit Jadhav Diploma in Graphic Designer 2.6", "2 Mithun Sen BSC 3"]
+    claims = _presence("Database Administrator Part A: Design and Development of the new Software",
+                       [_page(76, roster)], [(76, roster[0])])
+    assert all(c.detail.get("weak") for c in claims), "cited a designer as a database administrator"
+
+
+def test_evidence_of_the_right_kind_but_the_wrong_thing_is_unknown_not_a_pass():
+    from app.services.bidder_extraction import CriterionSpec
+    from app.services.evaluation import evaluate_criterion
+
+    roster = ["1 Rohit Jadhav Diploma in Graphic Designer 2.6"]
+    spec = CriterionSpec(key="doc_dba", label="Database Administrator", operator="exists", params={},
+                         requirement="Database Administrator")
+    claims = _presence("Database Administrator", [_page(76, roster)], [(76, roster[0])])
+    r = evaluate_criterion(spec, claims, "Database Administrator")
+    assert r.verdict == "unknown" and "names what this criterion asks for" in r.reason
+
+
+def test_an_identifier_is_self_proving():
+    """A GSTIN needs no corroborating word near it. Demoting the one on the bidder's own GST
+    certificate, because that page never spells out "GST", handed the criterion to a page that
+    mentioned GST returns in passing."""
+    claims = _presence("GST Registration",
+                       [_page(6, ["27AASCS9581M1Z5", "Legal Name STARK DIGITAL MEDIA SERVICES"]),
+                        _page(12, ["reconciled the Turnover declared in GST returns with the books"])],
+                       [(6, "27AASCS9581M1Z5")])
+    assert claims and claims[0].page == 6 and not claims[0].detail.get("weak")

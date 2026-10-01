@@ -165,6 +165,16 @@ def _numeric(spec: CriterionSpec, claims: list[Claim], reference_year: int | Non
 def _exists(spec: CriterionSpec, claims: list[Claim]) -> VerdictResult:
     if not claims:
         return _not_found(spec)
+    # Evidence of the right kind, on a page that names nothing this clause asked for, is a lead and
+    # not a finding. "Diploma in Graphic Designer" on a staff roster is personnel evidence and says
+    # nothing about a Database Administrator; passing on it tells a committee the submission proves
+    # something it does not, under a page number they will open.
+    if all(c.detail.get("weak") for c in claims):
+        return VerdictResult(
+            spec.key, "unknown", "deterministic", unknown_kind="low_confidence", evidence=claims[:2],
+            reason=f"Pages of the right kind were found ({claims[0].value.lower()}, "
+                   f"p{claims[0].page}), but none of them names what this criterion asks for. "
+                   "Shown as unknown rather than a pass, for an evaluator to confirm.")
     return VerdictResult(spec.key, "pass", "deterministic", evidence=claims[:1], computation="Document present",
                          reason=f"Evidence located: {claims[0].value}.")
 

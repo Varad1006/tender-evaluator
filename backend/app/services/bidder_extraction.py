@@ -25,6 +25,7 @@ from app.services.year_tables import (
 )
 from app.services.values import (
     GSTIN,
+    Amount,
     format_inr,
     format_inr_short,
     parse_amounts,
@@ -498,14 +499,20 @@ def _finder_for(spec: CriterionSpec):
     by_key = FINDERS.get(spec.key)
     if by_key is not None:
         return by_key
-    measures = spec.threshold_value is not None and spec.operator in (">=", "<=")
-    if measures:
-        from app.services.concepts import resolve
+    from app.services.concepts import resolve
 
-        concept = resolve(spec.requirement or spec.label, label=spec.label,
-                          datatype="count" if spec.threshold_unit not in (None, "INR") else "currency")
-        if concept is not None and concept.key in CONCEPT_FINDERS:
+    measures = spec.threshold_value is not None and spec.operator in (">=", "<=")
+    concept = resolve(spec.requirement or spec.label, label=spec.label,
+                      datatype="count" if spec.threshold_unit not in (None, "INR") else "currency")
+    if concept is not None:
+        # A criterion that measures gets a reader that returns a figure; one that only asks whether
+        # something was submitted gets the presence reader, which never invents a value. Giving a
+        # figure reader to "9. Turn Over and Net Worth Certificate" answers a question about the
+        # envelope with a number from somewhere else in it.
+        if measures and concept.key in CONCEPT_FINDERS:
             return CONCEPT_FINDERS[concept.key]
+        if not measures:
+            return find_concept_presence
     return find_generic_document if spec.key.startswith("doc_") else None
 
 
@@ -813,3 +820,228 @@ CONCEPT_FINDERS["staff_strength"] = find_staff_strength
 # years 2022-23 ... Page No.80-89" was read as a turnover of ₹2,022 and disqualified a bidder whose
 # certificate states ₹4.25 crore. The concept-aware reader refuses checklists.
 FINDERS["avg_turnover"] = find_turnover_concept
+
+
+# A bid opens with a list of its own contents, one row per enclosure. Where the list is ruled, each
+# row is a bare title — "Anti-Collusion Certificate" — with the page range in a separate cell, so
+# the row carries none of the marks a checklist line usually has and `CHECKLIST` cannot see it. The
+# page as a whole is unmistakable: almost every line on it is an entry in a list. Evidence may never
+# come from it, because a bid asserting that it contains a certificate is not the certificate.
+_CONTENTS_HEADING = re.compile(
+    r"checklist|table\s+of\s+contents|\bindex\b|list\s+of\s+(?:documents|enclosures|annexures)"
+    r"|compliance\s*\(?\s*yes\s*/\s*no|page\s*no\.?\s*(?:and|&)\s*section", re.IGNORECASE)
+
+
+def _is_contents_page(page) -> bool:
+    """Is this the page where the bid lists what it contains?
+
+    The rows of such a list are usually a ruled table, so `page.lines` holds only the heading and a
+    letterhead footer — four lines on the DBT bid's first page, which no ratio of listed lines can
+    detect. The heading is the reliable signal and it is right there: "Checklist for the documents to
+    be included in the Pre-Qualification (PQ) Folder", with a "Compliance(Yes/No)" column beside it.
+    """
+    text = page.text or ""
+    header = " ".join(" ".join(r[:1] + r[-1:]) for rows in (page.tables or []) for r in rows[:2])
+    if _CONTENTS_HEADING.search(text[:600]) or _CONTENTS_HEADING.search(header):
+        return True
+    from app.services.concepts import CHECKLIST
+
+    lines = [l.strip() for l in (page.lines or []) if len(l.strip()) >= 4]
+    if len(lines) < 6:
+        return False
+    listed = sum(1 for l in lines if CHECKLIST.search(l) or _CONTENTS_ROW.match(l))
+    return listed / len(lines) >= 0.4
+
+
+# "21. Anti Blacklisting 98-99", "16 Manpower Declaration Y Page No.75-77", and the bare-title form
+# a ruled contents table produces: a short title with no verb, under thirty characters of words.
+_CONTENTS_ROW = re.compile(
+    r"^\s*(?:\d{1,2}[.)]?\s+)?[A-Z][A-Za-z/&,’'\-. ]{3,46}\s*(?:\d{1,3}\s*[-–]\s*\d{1,3})?\s*$")
+
+# Words too common in procurement language to tell one requirement from another.
+_UNDISTINCTIVE = frozenset("""
+the of and to in a is be for shall on by with as or any this that are will from at not an all
+bidder bidders tender tenders document documents documentary evidence copy copies submit submitted
+required requirement should must have has been their its our we us i as per section clause annexure
+appendix format given mentioned above below following each last three financial year years date
+details detail name names such other others along with respectively case form forms page no nos
+certificate certificates declaration declarations self undertaking statement statements letter
+registration registered valid proof copies signed duly stamped attached enclosed authorised
+authorized terms accordance condition conditions entire scope work works service services part
+new one two four five all our ours company companies firm firms agency agencies entity india
+""".split())
+
+
+def _distinctive(spec: CriterionSpec) -> set[str]:
+    """The words that make this requirement a different requirement from its neighbours.
+
+    A concept says what *kind* of fact a clause is about; it cannot tell "Project Lead" from
+    "Database Administrator", or an anti-collusion declaration from an insolvency one, because both
+    pairs are the same kind of fact. Without this, one roster row reading "Diploma in Graphic
+    Designer" was cited as evidence of a Database Administrator, and a GST undertaking as evidence
+    of solvency — each a pass on a page that does not say what the committee would be told it says.
+    """
+    raw = re.findall(r"[A-Za-z][A-Za-z\-]{2,}", f"{spec.label} {spec.requirement}".lower())
+    words: set[str] = set()
+    for w in raw:
+        # "Anti-Collusion" has to compare equal to a page that writes "Anti Collusion".
+        words.update([w] + [part for part in w.split("-") if len(part) >= 3])
+    return {w for w in words if w not in _UNDISTINCTIVE and len(w) >= 3}
+
+
+def find_concept_presence(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """Evidence that a document or registration the tender asks for is in the envelope.
+
+    `find_generic_document` searches for whatever words the requirement happened to use. That finds
+    nothing when the bid calls the thing something else, and it finds the wrong page when the words
+    appear in the bid's own contents list or in a clause quoting the tender back. A concept carries
+    the bidder's vocabulary instead, together with the two things that must stop a match: a veto for
+    text that is not about the fact, and a negation for text that is about it and says no.
+
+    A structured identifier — a PAN, a GSTIN, a Udyam number — is reported first, because a number
+    only one issuer can mint is stronger evidence than any sentence around it.
+    """
+    from app.services.concepts import resolve
+
+    concept = resolve(spec.requirement or spec.label, label=spec.label,
+                      datatype="count" if spec.threshold_unit not in (None, "INR") else "currency")
+    if concept is None:
+        return find_generic_document(doc, spec)
+
+    terms = _distinctive(spec)
+    contents = {p.number for p in doc.pages if _is_contents_page(p)}
+    page_words = {}
+    for pg in doc.pages:
+        found: set[str] = set()
+        for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", (pg.text or "").lower()):
+            found.update([w] + [part for part in w.split("-") if len(part) >= 3])
+        page_words[pg.number] = found
+    # Three grades of evidence, and the citation shown is the best one found. The page a bid states a
+    # fact on usually carries several lines of the right kind — a covering letter answers four
+    # separate clauses of the RFP in four paragraphs — so quoting the first is how three criteria end
+    # up citing one sentence that addresses none of them.
+    exact: list[Claim] = []   # the quoted line itself names what the clause asked for
+    on_page: list[Claim] = []  # something else on the page does
+    weak: list[Claim] = []     # the right kind of page, naming nothing the clause asked for
+    seen: set[tuple[int, str]] = set()
+
+    def add(page: int, text: str, cue: str, section: str = "") -> None:
+        if page in contents:
+            return
+        key = (page, re.sub(r"\s+", " ", text).strip().lower()[:90])
+        if key in seen:
+            return
+        seen.add(key)
+        line_words: set[str] = set()
+        for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", text.lower()):
+            line_words.update([w] + [part for part in w.split("-") if len(part) >= 3])
+        if cue == "identifier" or not terms:
+            # A number only one issuer can mint needs no corroborating word near it. Demoting the
+            # GSTIN on the bidder's own GST certificate because the page never spells out "GST"
+            # handed the criterion to a page that merely mentioned GST returns in passing.
+            bucket = exact
+        elif terms & line_words:
+            bucket = exact
+        elif terms & page_words.get(page, set()):
+            bucket = on_page
+        else:
+            bucket = weak
+        if len(bucket) >= 6:
+            return
+        s = Sentence(page=page, text=text.strip()[:400], section=section or concept.label)
+        value = concept.label if cue != "identifier" else f"{concept.label} stated"
+        bucket.append(_claim(spec.key, s, value, None, concept=concept.key, cue=cue,
+                             weak=bucket is weak))
+
+    for cue_wanted in ("identifier", "anchor"):
+        for s in doc.sentences:
+            if concept.hit(s.text) == cue_wanted:
+                add(s.page, s.text, cue_wanted, s.section)
+        for p in doc.pages:
+            for line in (p.lines or []):
+                if len(line.strip()) >= 4 and concept.hit(line) == cue_wanted:
+                    add(p.number, line, cue_wanted)
+        if exact or on_page:
+            break
+    # Evidence of the right kind on a page that names nothing the clause asked for is shown, so the
+    # committee can look, but it is not allowed to pass the criterion on its own.
+    return (exact + on_page) or weak
+
+
+# A date the firm came into being, and the years since. "DATE OF INCORPORATION / REGISTRATION OF
+# ENTERPRISE 27/12/2019" on a Udyam certificate, "Date of commencement of business / 01/02/2013" on
+# a MahaTender profile — the requirement ("Proof of Existence of Firm from last 5 years") is
+# answered by a date, and the comparison needs the number of years it implies.
+_DATE = re.compile(r"\b(\d{1,2})[./\-](\d{1,2})[./\-]((?:19|20)\d{2})\b")
+_MONTH_DATE = re.compile(
+    r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s+((?:19|20)\d{2})\b",
+    re.IGNORECASE)
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+
+def find_firm_age(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """How long the bidder has existed, in years, from the date its own documents state."""
+    from datetime import date
+
+    from app.services.concepts import FIRM_AGE
+
+    today = date.today()
+    out: list[Claim] = []
+    seen: set[int] = set()
+    for page in sorted(_concept_pages(doc, FIRM_AGE)):
+        p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
+        if p is None:
+            continue
+        for line in (p.lines or []) + [s.text for s in doc.sentences if s.page == page]:
+            if FIRM_AGE.hit(line) is None:
+                continue
+            found = None
+            m = _DATE.search(line)
+            if m:
+                d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if 1 <= mo <= 12 and 1 <= d <= 31:
+                    found = date(y, mo, d)
+            if found is None and (m := _MONTH_DATE.search(line)):
+                found = date(int(m.group(3)), _MONTHS[m.group(2)[:3].lower()], int(m.group(1)))
+            if found is None or found > today:
+                continue
+            years = (today - found).days / 365.25
+            if years in seen or years > 120:
+                continue
+            seen.add(years)
+            s = Sentence(page=page, text=line.strip()[:300], section="Constitution")
+            out.append(_claim(spec.key, s, f"{years:.1f} years (since {found.isoformat()})",
+                              round(years, 1), concept=FIRM_AGE.key, since=found.isoformat()))
+    return out
+
+
+def find_tender_fee(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """The tender fee the bidder paid — a separate payment from the EMD, on the same receipt."""
+    from app.services.concepts import TENDER_FEE
+
+    out: list[Claim] = []
+    for page in sorted(_concept_pages(doc, TENDER_FEE)):
+        p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
+        if p is None:
+            continue
+        for line in (p.lines or []) + [s.text for s in doc.sentences if s.page == page]:
+            if TENDER_FEE.hit(line) is None:
+                continue
+            # "Tender Fee in ₹ : 6,579" — the currency marker is a symbol in the label, so the
+            # amount beside it carries none of its own.
+            amounts = parse_amounts(line) or [
+                Amount(value=float(m.group(1).replace(",", "")), raw=m.group(1))
+                for m in re.finditer(r"(?<![\d,.])(\d[\d,]{2,})(?![\d,.])", line)]
+            if not amounts:
+                continue
+            value = amounts[0].value
+            if not 100 <= value <= 10_000_000 or any(c.value_numeric == value for c in out):
+                continue
+            s = Sentence(page=page, text=line.strip()[:300], section="Tender fee")
+            out.append(_claim(spec.key, s, format_inr(value), value, concept=TENDER_FEE.key))
+    return out
+
+
+CONCEPT_FINDERS["firm_age"] = find_firm_age
+CONCEPT_FINDERS["tender_fee"] = find_tender_fee

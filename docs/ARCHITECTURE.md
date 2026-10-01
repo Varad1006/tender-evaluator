@@ -206,6 +206,49 @@ they were read in, so the same requirement arrives as `avg_turnover` on one tend
 `positive_net_worth` on another and `min_staff_strength` on a third. A registry keyed by name finds
 a finder for none of them on a tender nobody has seen yet.
 
+### The concept list, and what it is not
+
+Thirty concepts, harvested from what five real RFPs ask for rather than imagined:
+
+| group | concepts |
+|---|---|
+| money | `turnover` `net_worth` `net_profit` `solvency` `tender_fee` `audited_accounts` |
+| people | `staff_strength` `key_roles` |
+| identity | `pan` `gst` `msme_udyam` `legal_entity` `firm_age` `signing_authority` `bidder_particulars` |
+| declarations | `non_blacklisting` `not_insolvent` `anti_collusion` `non_disclosure` `no_deviation` `past_performance` `no_joint_venture` `bid_forms` |
+| labour | `provident_fund` `employee_insurance` |
+| experience | `project_experience` `work_order` `completion_certificate` |
+| capability | `quality_certification` `machinery` |
+
+Across 72 criteria extracted from three RFPs, 66 (92%) now reach a concept-aware or dedicated
+reader, against 20 (28%) before. The six that do not are not requirements a concept should cover:
+one open-ended catch-all ("Any other supporting credential/documents"), one that belongs to the
+marks stage ("Technical Evaluation Score"), and four that are **scope headings the tender-side
+extractor wrongly turned into document requirements** ("Design Phase", "Project Duration"). That
+last group is an over-extraction defect on the tender side, not a gap on the bid side.
+
+Three mechanisms do most of the work:
+
+* **An identifier is self-proving.** A PAN, GSTIN, CIN, LLPIN, Udyam number or EPF code is
+  recognisable by shape alone, so the fact is located without depending on any word near it — which
+  matters because the word is usually in a column header two cells away, or on a scan OCR misread.
+* **A negation outranks every anchor.** One bid's EPF office writes "your establishment is **not
+  registered with ESIC**", and the two pages after it are a general brochure about the ESI Act.
+  Every word a search for ESIC registration looks for is present, and the document says the bidder
+  does not have it. A veto says "this text is not about the fact"; a negation says "this text is
+  about the fact and says no". Concepts that *are* a negative declaration ("we have not been
+  blacklisted") opt out.
+* **A concept locates a kind of fact, not an instance.** "Project Lead" and "Database
+  Administrator" are the same kind of fact, so only the clause's own distinctive words can separate
+  them. Without that, a roster row reading "Diploma in Graphic Designer" was cited as evidence of a
+  Database Administrator. Evidence of the right kind on a page naming nothing the clause asked for is
+  still shown — but it yields `unknown`, never a pass.
+
+And the page a bid lists its own contents on is never evidence: a bid asserting that it encloses a
+certificate is not the certificate. Where that list is ruled, each row is a bare title with the page
+range in another cell, so the row has none of the marks a checklist line usually has — the page is
+identified from its heading instead.
+
 ### Grids nobody ruled
 
 A chartered accountant aligns figures with spaces, so `page.tables` is empty on exactly the pages
