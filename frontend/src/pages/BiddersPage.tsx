@@ -9,12 +9,12 @@ import {
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, pdfLinks } from '../api/client';
-import type { BidderDocumentInfo, BidderSummary } from '../api/types';
+import type { BidderDocumentInfo, BidderSummary, RequirementDocuments } from '../api/types';
 import { KindStrip } from '../components/BundlePanels';
 import { CitationTag } from '../components/CitationTag';
 import { FilePickerButton, PageTitle, Panel } from '../components/common';
 import { isBusy, useTender } from '../hooks/useTender';
-import { tokens } from '../theme';
+import { notGateStyle, tokens, verdictStyle } from '../theme';
 
 const SAMPLE_BIDS = [
   'sunrise_energy_technical_financial_bid.pdf',
@@ -71,6 +71,73 @@ function Contents({ doc }: { doc: BidderDocumentInfo }) {
         </Tooltip>
       ))}
     </Stack>
+  );
+}
+
+const FETCH_STATUS: Record<RequirementDocuments['status'], { label: string; bg: string; fg: string }> = {
+  found: { label: 'Found', bg: verdictStyle.pass.bg, fg: verdictStyle.pass.fg },
+  supporting_only: { label: 'Supporting only', bg: verdictStyle.unknown.bg, fg: verdictStyle.unknown.fg },
+  not_found: { label: 'Not in bid', bg: verdictStyle.unknown.bg, fg: verdictStyle.unknown.fg },
+  not_a_gate: { label: 'Not a gate', bg: notGateStyle.bg, fg: notGateStyle.fg },
+};
+
+/** Each tender requirement and the documents of this bid that answer it, linked to their pages. */
+function RequirementDocs({ requirements }: { requirements: RequirementDocuments[] }) {
+  const [open, setOpen] = useState(false);
+  const gates = requirements.filter((r) => r.status !== 'not_a_gate');
+  const found = gates.filter((r) => r.status === 'found').length;
+  return (
+    <Box sx={{ mt: 1.25, borderTop: `1px solid ${tokens.rowBorder}`, pt: 1 }}>
+      <ButtonBase onClick={() => setOpen(!open)} sx={{ fontSize: 12.5, color: tokens.inkSoft, fontWeight: 600 }}>
+        Documents by requirement · {found} of {gates.length} found {open ? '▴' : '▾'}
+      </ButtonBase>
+      {open && (
+        <Stack spacing={1} sx={{ mt: 1 }}>
+          {requirements.map((r) => {
+            const st = FETCH_STATUS[r.status];
+            const shown = r.documents.filter((d) => d.role !== 'supporting').slice(0, 6);
+            const support = r.documents.filter((d) => d.role === 'supporting').length;
+            return (
+              <Box key={r.key}>
+                <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
+                  <Typography sx={{ fontSize: 12, color: tokens.ink, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {r.label}
+                  </Typography>
+                  <Box component="span" sx={{ fontSize: 10, fontWeight: 600, px: 0.75, borderRadius: 1, bgcolor: st.bg, color: st.fg, whiteSpace: 'nowrap' }}>
+                    {st.label}
+                  </Box>
+                </Stack>
+                {r.status === 'not_found' && r.wanted.length > 0 && (
+                  <Typography sx={{ fontSize: 11, color: tokens.muted }}>No {r.wanted.slice(0, 3).join(', ').toLowerCase()} in this bid</Typography>
+                )}
+                {shown.length > 0 && (
+                  <Stack direction="row" useFlexGap sx={{ flexWrap: 'wrap', gap: 0.5, mt: 0.4 }}>
+                    {shown.map((d) => (
+                      <Tooltip key={`${d.document_id}-${d.from}`}
+                        title={[d.title, d.dated && `dated ${d.dated}`, d.firm && `names ${d.firm}`, d.file_name, d.why]
+                          .filter(Boolean).join(' · ')}>
+                        <Chip size="small" component="a" clickable target="_blank" rel="noopener"
+                          href={d.document_id ? pdfLinks.bidderDoc(d.document_id, d.from) : undefined}
+                          label={`${d.label} · p.${d.to > d.from ? `${d.from}–${d.to}` : d.from}`}
+                          sx={{ height: 20, fontSize: 10.5, bgcolor: tokens.hover, color: tokens.inkSoft }} />
+                      </Tooltip>
+                    ))}
+                    {r.documents.length - shown.length - support > 0 && (
+                      <Typography sx={{ fontSize: 10.5, color: tokens.faint, alignSelf: 'center' }}>
+                        +{r.documents.length - shown.length - support} more
+                      </Typography>
+                    )}
+                  </Stack>
+                )}
+                {r.reads === 'whole_bid' && r.status !== 'not_a_gate' && (
+                  <Typography sx={{ fontSize: 10.5, color: tokens.faint }}>Checked across the whole bid (an absence must be checked everywhere)</Typography>
+                )}
+              </Box>
+            );
+          })}
+        </Stack>
+      )}
+    </Box>
   );
 }
 
@@ -143,6 +210,7 @@ function BidderCard({ n, bidder, criteriaCount, onRemove }: { n: number; bidder:
               </Box>
             ))}
           </Stack>
+          {bidder.document_map?.requirements?.length ? <RequirementDocs requirements={bidder.document_map.requirements} /> : null}
           <Typography sx={{ fontSize: 12, color: tokens.faint, mt: 1 }}>
             Evidence located for {bidder.criteria_with_evidence} of {criteriaCount} criteria · {pages} pages
           </Typography>

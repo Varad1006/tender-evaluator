@@ -51,6 +51,16 @@ function EvidenceCard({ ev }: { ev: Evidence }) {
         {ev.section || 'Bidder submission'}
         {ev.tier === 'llm' && ' · LLM-located, quote verified'}
       </Typography>
+      {ev.fetched_from ? (
+        <Typography sx={{ fontSize: 11, color: tokens.green, mb: 0.75 }}>
+          Read from the {ev.fetched_from.label.charAt(0).toLowerCase() + ev.fetched_from.label.slice(1)} fetched for this requirement
+          {' '}(p.{ev.fetched_from.to > ev.fetched_from.from ? `${ev.fetched_from.from}–${ev.fetched_from.to}` : ev.fetched_from.from})
+        </Typography>
+      ) : ev.fetch_tier === 'whole_bid' ? (
+        <Typography sx={{ fontSize: 11, color: '#92600C', mb: 0.75 }}>
+          Found elsewhere in the bid — not in a document of the kind this requirement asks for
+        </Typography>
+      ) : null}
       <Quote>{ev.quote}</Quote>
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 1.25 }}>
         {ev.document_id && (

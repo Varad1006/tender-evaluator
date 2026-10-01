@@ -1,7 +1,7 @@
 """Score a corpus_report.py --json output against hand-verified ground truth.
 
     uv run python scripts/corpus_report.py "/path/to/Dataset Tenders" --ocr --json /tmp/report.json
-    uv run python scripts/score_corpus.py /tmp/report.json [tests/data/corpus_truth.json]
+    uv run python scripts/score_corpus.py /tmp/report.json [tests/local/corpus_truth.json]
 
 Checks, per tender: each fact value, title/award, each expected criterion (present, located or
 derived, threshold value — or none where an input is missing — similar-works options, key-quantity
@@ -15,7 +15,8 @@ import json
 import sys
 from pathlib import Path
 
-TRUTH = Path(__file__).resolve().parents[1] / "tests" / "data" / "corpus_truth.json"
+# Ground truth is read from real tenders, so it stays on the machine that has them (git-ignored).
+TRUTH = Path(__file__).resolve().parents[1] / "tests" / "local" / "corpus_truth.json"
 
 
 def _close(a, b, tol=0.006) -> bool:

@@ -297,7 +297,7 @@ def extract_bundle(docs: list[DocView], boqs: list[tuple[str, str, object]] | No
     for key in [k for k, c in drafts.items() if c.extraction_method == "checklist"]:
         text = drafts[key].source.text if drafts[key].source else ""
         # A summary-table row names the criterion ("Registration") and puts the rule in its evidence
-        # column ("… Registration Certificate upto 1.5 cr"): match on both.
+        # column ("… registration certificate up to ₹1.5 Cr"): match on both.
         probe = f"{text} {drafts[key].params.get('evidence') or ''}"
         target = None
         for pat, t in merge_map:

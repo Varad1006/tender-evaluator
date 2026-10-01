@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 
 LOCAL = Path(__file__).resolve().parent / "local"
-TRUTHS = sorted(LOCAL.glob("*_truth.json")) if LOCAL.exists() else []
+# Bid ground truth only (a file naming its envelopes); the tender corpus truth lives beside it.
+TRUTHS = sorted(p for p in LOCAL.glob("*_truth.json") if "bids_glob" in p.read_text()) if LOCAL.exists() else []
 CACHE = Path(os.environ.get("TE_OCR_CACHE_DIR", Path(__file__).resolve().parents[1] / "data" / "ocr_cache"))
 
 

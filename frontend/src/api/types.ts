@@ -82,6 +82,41 @@ export interface BidderDocumentInfo {
   ocr_pages: number;
 }
 
+/** One document in a bid: a run of pages of one kind (document_fetch.inventory). */
+export interface BidDocument {
+  kind: string;
+  label: string;
+  document_id: string | null;
+  file_name: string;
+  from: number;
+  to: number;
+  title: string;
+  dated: string | null;
+  firm: string | null;
+}
+
+/** A document fetched for a requirement, and why. */
+export interface FetchedDocument extends BidDocument {
+  role: 'primary' | 'heading' | 'supporting';
+  why: string;
+}
+
+/** Each tender requirement and the bid's documents that answer it (document_fetch.fetch). */
+export interface RequirementDocuments {
+  key: string;
+  label: string;
+  status: 'found' | 'supporting_only' | 'not_found' | 'not_a_gate';
+  basis: string;
+  reads: 'whole_bid' | 'documents_first';
+  wanted: string[];
+  documents: FetchedDocument[];
+}
+
+export interface DocumentMap {
+  inventory: BidDocument[];
+  requirements: RequirementDocuments[];
+}
+
 export interface BidderSummary {
   id: string;
   name: string;
@@ -103,6 +138,7 @@ export interface BidderSummary {
   price_display: string | null;
   price_citation: PriceCitation | null;
   price_conflict: boolean;
+  document_map?: DocumentMap;
 }
 
 export interface TenderDetail {
@@ -156,6 +192,9 @@ export interface Evidence {
   section: string;
   value: string;
   tier: 'deterministic' | 'llm';
+  /** The fetched document the figure was read from (absent when it came from the rest of the bid). */
+  fetched_from?: { kind: string; label: string; from: number; to: number; role: string } | null;
+  fetch_tier?: 'documents' | 'supporting' | 'whole_bid' | null;
 }
 
 export interface VerdictCell {

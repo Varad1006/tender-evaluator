@@ -74,12 +74,15 @@ def run(tender_files: list[Path], bids: dict[str, list[Path]], ocr, reference: d
             claims = [c for c in res.claims if c.criteria_key == s.key]
             v = evaluate_criterion(replace(s, tender=bctx), claims, s.label, reference)
             verdicts[s.key] = {"verdict": v.verdict, "unknown_kind": v.unknown_kind, "computation": v.computation,
-                               "reason": v.reason, "evidence": [{"page": e.page, "value": e.value, "num": e.value_numeric, "quote": e.quote}
+                               "reason": v.reason, "evidence": [{"page": e.page, "value": e.value, "num": e.value_numeric, "quote": e.quote,
+                                                                 "fetch_tier": e.detail.get("fetch_tier"),
+                                                                 "fetched_from": e.detail.get("fetched_from")}
                                                                 for e in v.evidence], "extra": v.extra}
         out["bids"][name] = {
             "firm": (res.identity.get("firm_name") or {}).get("value"), "bid_date": res.identity.get("bid_date"),
             "status": overall_status([(v["verdict"], gating[k]) for k, v in verdicts.items()]),
             "ocr": {"pages": total, "cached": cached, "errors": len(errors)}, "verdicts": verdicts,
+            "documents": res.document_map,
         }
     return out
 

@@ -309,6 +309,7 @@ def _apply_bid(session: Session, bidder: Bidder, docs, result, name_given: bool)
     _save_claims(session, bidder, result)
     facts = dict(result.identity)
     facts["contents"] = {row.id: result.contents_by_doc.get(row.id, []) for row in bidder.documents}
+    facts["document_map"] = getattr(result, "document_map", None) or {}
     if not name_given:
         # Re-read every pass: before OCR a scanned bid may yield only a supplier on an invoice.
         firm = (result.identity.get("firm_name") or {}).get("value")
@@ -522,6 +523,7 @@ def evaluate_tender(session: Session, tender: Tender) -> int:
             evidence_json=[{
                 "document_id": c.detail.get("document_id"), "page": c.page, "quote": c.quote,
                 "section": c.section, "value": c.value, "tier": c.tier,
+                "fetched_from": c.detail.get("fetched_from"), "fetch_tier": c.detail.get("fetch_tier"),
             } for c in result.evidence],
         ))
         count += 1
@@ -583,7 +585,8 @@ def serialize_bidder(session: Session, b: Bidder) -> dict:
             "contents": (facts.get("contents") or {}).get(d.id, []), "error": d.error,
             "ocr_pages": len(d.ocr_modes or {}),
         } for d in b.documents],
-        "identity": {k: v for k, v in facts.items() if k != "contents"},
+        "identity": {k: v for k, v in facts.items() if k not in ("contents", "document_map")},
+        "document_map": facts.get("document_map") or {},
         "warnings": b.warnings or [],
         "ocr_status": b.ocr_status or "not_needed", "ocr_progress": b.ocr_progress or {}, "timings": b.timings or {},
         "price": price.value_numeric if price else None,

@@ -71,7 +71,7 @@ FACT_LABELS = {
     "pre_bid_meeting": ("Pre-bid meeting", "text"),
 }
 
-# "PMC/ROAD/2026/235", and zone tenders "PMC/ZONE-3/2026-27/WARJE-KARVENAGAR/4" (financial year,
+# "PMC/ROAD/2026/123", and zone tenders "PMC/ZONE-9/2026-27/OFFICE-NAME/7" (financial year,
 # then the office). A space after a slash is a line break or an OCR artefact.
 _REF = re.compile(r"\bPMC/[A-Z0-9][A-Z0-9\-]*(?:/[A-Z0-9\-]+)*?/20\d\d(?:-\d{2})?(?:/ ?[A-Z][A-Z0-9\-]*)*/\d+\b")
 _NUM = r"(\d[\d,]*(?:\.\d+)?)"
@@ -207,7 +207,7 @@ class FactCollector:
             add("department", mm.group(1).title(), mm.group(0), "Invitation")
 
         # B-1 form row: 9 "n/-" amounts then time limit, DLP and cost of tender document. OCR gives the
-        # same row as a table ("| 7994450/- | 6774958/- | … | 12 | 12 | 6079"), on the page after "B-1 Form".
+        # same row as a table ("| 5900000/- | 5000000/- | … | 12 | 12 | 5000"), on the page after "B-1 Form".
         mm = re.search(r"((?:\d+/-\s*\|?\s*){9})(\d+)\s*\|?\s*(\d+)\s*\|?\s*(\d+)", raw)
         if mm and ("B-1" in raw or (re.search(r"earnest\s*money", raw, re.I) and re.search(r"security\s*deposit", raw, re.I))):
             amounts = [_num(a) for a in re.findall(r"(\d+)/-", mm.group(1))]
@@ -220,7 +220,7 @@ class FactCollector:
             add("dlp_months", int(mm.group(3)), q, "B-1 form")
             add("cost_of_tender_doc", float(mm.group(4)), q, "B-1 form")
 
-        # Conditions volume tender table: "... 4999970 4164895 449681 41649 208245 12 24 1359"
+        # Conditions volume tender table: "... 5900000 5000000 900000 50000 250000 12 24 5000"
         # (total, put to tender, GST, EMD, SD, months, DLP, doc cost). Text order varies by extractor,
         # so the eight numbers are matched on their own and sanity-checked instead of anchored.
         if re.search(r"Total\s+Estimated", raw, re.I) and re.search(r"Earnest\s+money", raw, re.I):
@@ -239,8 +239,8 @@ class FactCollector:
                 break
 
         # Road / conditions volumes state the key numbers in prose, often with words run together by
-        # the text layer ("EARNESTMONEYDEPOSIT : a) An earnest money depositofRs. 178063/-",
-        # "The time limit for completion ofwork is 12 calendarmonths").
+        # the text layer ("EARNESTMONEYDEPOSIT : a) An earnest money depositofRs. 123450/-",
+        # "time limit for completion ofwork is 9 calendarmonths").
         mm = re.search(r"earnest\s*money\s*deposit\s*of\s*Rs\.?\s*([\d,]{4,})\s*/-", raw, re.I)
         if mm:
             add("emd", _num(mm.group(1)), _line_with(raw, mm.group(1)), "Conditions clause")
@@ -252,7 +252,7 @@ class FactCollector:
         if mm:
             add("completion_months", int(mm.group(1)), mm.group(0), "Conditions clause")
 
-        # Tender Abstract header: "Work Name : kothrud bavdhan ... (For Technical Sanctioned)"
+        # Tender Abstract header: "Work Name : <name of work> ... (For Technical Sanctioned)"
         mm = re.search(r"^\s*Work Name\s*:\s*(.+?)(?:\(For Technical Sanction(?:ed)?\))?\s*$", raw, re.M)
         if mm and re.search(r"[A-Za-z]{4}", mm.group(1)):
             add("work_name", mm.group(1).strip().rstrip("."), mm.group(0), "Tender Abstract")
@@ -366,7 +366,7 @@ class FactCollector:
     # ----------------------------------------------------------------------------------
     def scan_corrigendum(self, raw: str, tables: list[list[list[str]]], doc_id: str, doc_name: str, page: int) -> None:
         """Revised values in a corrigendum: a table with an 'Existing | Revised' pair of columns, or
-        prose ('The estimated cost … shall be read as Rs. 42,50,000/-')."""
+        prose ('The estimated cost … shall be read as Rs. 31,25,000/-')."""
         for rows in tables:
             for h, head in enumerate(rows[:3]):
                 revised = next((j for j, c in enumerate(head) if re.search(r"revised|amended|corrected|read\s*as|modified|new", c, re.I)), None)

@@ -3,13 +3,11 @@
 A tender states a requirement in its own words and a bid answers in the bidder's. The two
 vocabularies barely overlap, and nothing in the submission is labelled with the tender's wording:
 
-    tender (DBT RFP p.15)  "an on-roll staff strength of a minimum of 30 IT Professionals
-                            having Core Expertise in Software Development"
-    bid    (p.75)          "Undertaking for number of technically qualified professionals on
-                            companies' payroll ... our organization has 50+ technically qualified
-                            professionals having core expertise in Software development"
+    tender  "an on-roll staff strength of at least 25 IT professionals"
+    bid     "we confirm that 40+ qualified engineers are on our payroll", over a numbered roster
 
-Not one of "on-roll", "staff strength" or "IT Professionals" appears in the bid. Searching for the
+(an invented pair with the shape the corpus shows). Not one of "on-roll", "staff strength" or
+"IT professionals" appears in the bid. Searching for the
 requirement's words finds nothing and the criterion comes back unknown, which is the failure mode
 this module exists to remove: the fact *is* in the submission, under another name.
 
@@ -22,10 +20,10 @@ kinds of cue, because they license different conclusions:
                  Operations" is the turnover line of a P&L, and also appears in notes and
                  schedules; "employees" appears in a dozen unrelated declarations. A support
                  needs a second cue, or a structure (a year grid, a numbered roster) to stand.
-  * `vetoes`     name the fact in text that states no value of it. Every bid carrying a tax
-                 invoice carries "it shall be accounted for in the turnover of sales while filing
-                 of return" (7453310 p.279) — the word "turnover", next to invoice amounts, in a
-                 sentence that reports nobody's turnover. A veto outranks any anchor on the same
+  * `vetoes`     name the fact in text that states no value of it. Every tax invoice in a bid
+                 carries the standard GST declaration about accounting for supplies in turnover
+                 — the word "turnover", next to invoice amounts, in a sentence that reports
+                 nobody's turnover. A veto outranks any anchor on the same
                  span, because a false figure cited to a real page is worse than no figure.
 
 The cue lists are vocabulary, not tender rules: they say how Indian procurement documents word
@@ -67,10 +65,9 @@ def script_of(text: str) -> str:
 
 
 # Every bid opens with a checklist of what it contains, and the tender closes with the same list.
-# Those rows name each concept precisely — "Copy of the audited total turnover, net-worth and
-# Profit & Loss for financial years 2022-23, 2023-24 and 2024-25 ... Page No.80-89" — next to
-# numbers that are page ranges and years, not money. Read as evidence it yields a net worth of
-# ₹2,022 for a company whose certificate says ₹3.32 crore, cited to a real page of the real bid.
+# Those rows name each concept precisely ("copy of audited turnover and net worth ... page no.
+# 40-45") next to numbers that are page ranges and years, not money. Read as evidence, a
+# financial year becomes a net worth of two thousand rupees, cited to a real page.
 #
 # A checklist is a claim about where a document is, never about what it says, so this suppresses
 # every concept at once rather than being repeated in each one's vetoes.
@@ -155,19 +152,11 @@ class Concept:
 # Money the bidder earned
 # ----------------------------------------------------------------------------------------------
 
-# Twelve bids state turnover eleven different ways. Observed headings, verbatim:
-#   "TURNOVER CERTIFICATE" / "ANNUAL TURNOVER CERTIFICATE" / "Turnover Certificates"
-#   "Financial Year | Turnover (Rs)"                       (7321343 p.6)
-#   "Financial Year | Sales Turnover (in Work done crore)" (7322267 p.9)
-#   "Sr No | Financial Year | Annual Turnover"             (7453310 p.48)
-#   "No. | Details | FY 2022-23 ... | 1 Turnover 407"      (DBT bid p.15, figures in lakhs)
-#   "Revenue From Operations"                              (7453310 p.87, audited P&L)
-#   "PART H - Details of Turnover as per GSTR-3B ... Taxable Turnover | Total Turnover"
-#   "Gross receipt"                                        (7455121 p.64, Form 26AS)
-#   "Turnover / Receipts"                                  (7455121 p.77, ITR computation)
-# and in prose: "has the turnover as stated below during the last Five financial years",
-# "their annual turnovers for last three consecutive years are as under", "the value of Business
-# Turnover of, MR.<name> PROP OF M/s <firm>".
+# Bids state turnover in many shapes: a CA's "turnover certificate"; a year grid whose column is
+# headed "turnover", "sales turnover", "contract receipts" or "work done"; a statement of figures
+# in lakhs; the "revenue from operations" line of an audited P&L; the turnover part of a GST
+# return; "gross receipts" in Form 26AS; "turnover / receipts" in an ITR computation; and prose
+# ("has the turnover stated below for the last five financial years").
 TURNOVER = Concept(
     key="turnover",
     label="Annual turnover",
@@ -177,8 +166,7 @@ TURNOVER = Concept(
         r"\bcontract\s+receipts?\b",
         r"\bbusiness\s+receipts?\b",
         r"\bsales?\s+and\s+services?\b",
-        # Marathi. "मागील ५ वर्षातील कंत्राटदाराची कामाची उलाढाल", "चार्टर्ड अकाउंटंट प्रमाणित
-        # केलेली निविदाधारकाची मागील पाच वर्षातील आर्थिक उलाढाल".
+        # Marathi: उलाढाल with its usual qualifiers (आर्थिक, वार्षिक, कामाची).
         r"उलाढाल", r"आर्थिक\s*उलाढाल", r"वार्षिक\s*उलाढाल", r"कामाची\s*उलाढाल",
     ),
     supports=_rx(
@@ -189,8 +177,8 @@ TURNOVER = Concept(
         r"\boperating\s+income\b",
     ),
     # Every tax invoice in a bid carries the GST declaration, and bank-detail blocks interleave
-    # with it in the text layer (7451021 p.67-68). "Aggregate turnover in the preceding year" is
-    # the composition-scheme line on a GST certificate, not a reported figure.
+    # with it in the text layer. "Aggregate turnover in the preceding year" is the
+    # composition-scheme line on a GST certificate, not a reported figure.
     vetoes=_rx(
         r"accounted\s+for\s+in\s+(?:the\s+)?(?:\S+\s+){0,6}?turnover\s+of\s+(?:supplies|sales)",
         r"turnover\s+of\s+(?:supplies|sales)\s+while\s+fil",
@@ -212,13 +200,12 @@ TURNOVER = Concept(
     ),
 )
 
-# Net worth is the concept the corpus hides best. In twelve civil-works bids the words appear
-# twice: once in an index ("14. Net Worth Certificate 49-49", 7453310 p.2) and once as a balance
-# sheet caption ("(1) Shareholders Fund (a) Share Capital", p.86). The figure itself is either
-#   * a labelled row of the CA's statement — "2 Net-Worth 255 293 332" (DBT bid p.15, lakhs), or
-#   * never stated, and derivable only from the balance sheet. The certificate that asks for it
-#     prints the derivation: "Net-worth is determined by subtracting total liabilities from total
-#     assets" (DBT bid p.13), and the other standard route is share capital + reserves & surplus.
+# Net worth is the concept the corpus hides best. In civil-works bids the words tend to appear
+# only in an index row and as a balance-sheet caption ("shareholders' funds"). The figure itself is
+# either
+#   * a labelled row of the CA's statement, one column per year (often in lakhs), or
+#   * never stated, and derivable only from the balance sheet: total assets less total
+#     liabilities, or share capital + reserves & surplus.
 # `derived_from` holds both routes so a bid that states only a balance sheet can still answer.
 NET_WORTH = Concept(
     key="net_worth",
@@ -295,11 +282,10 @@ SOLVENCY = Concept(
 
 # The requirement counts people; the bid proves them with a roster. Three routes to the number,
 # and they are checked in this order because they differ in how much they can be trusted:
-#   1. a declared count — "has 50+ technically qualified professionals" (DBT bid p.75)
-#   2. the roster's own row count — the numbered list on pp.75-77 runs to 66
-#   3. a tabulated staff statement — "STATEMENT NO -IV Details of Technical Personnel Available
-#      with Contractor" (7453310 p.292), "Technical Staff Certificate ... the following technical
-#      staff is currently working with company / organization" (7455121 p.15)
+#   1. a declared count — "has 40+ qualified professionals"
+#   2. the roster's own row count — a numbered list of names and qualifications
+#   3. a tabulated staff statement — the works tenders' Statement IV of technical personnel, or a
+#      "technical staff certificate" listing the people currently employed
 # A declared count can be a round claim ("50+"); a roster is countable and is what corroborates it.
 STAFF_STRENGTH = Concept(
     key="staff_strength",
@@ -313,8 +299,8 @@ STAFF_STRENGTH = Concept(
         r"\btechnical(?:ly)?\s+(?:qualified\s+)?(?:professionals?|personnel|staff|manpower)\b",
         r"\bkey\s+personnel\b",
         r"\btechnical\s+persons?\b",
-        # The Marathi personnel statement's own column headings (PMC works tender, Statement IV):
-        # "अ.क्र. | नाव | शैक्षणिक अर्हता | कामाचा अनुभव | निविदाधारकाकडे कार्यरत कालावधी".
+        # The Marathi personnel statement's column headings: name, educational qualification,
+        # experience, period with the bidder.
         r"तांत्रिक\s*(?:कर्मचारी|कर्मचा|मनुष्यबळ|व्यक्ती)", r"मनुष्यबळ",
         r"शैक्षणिक\s*(?:अर्हता|पात्रता)", r"कर्मचारी\s*संख्या",
     ),
@@ -383,8 +369,8 @@ NON_BLACKLIST = Concept(
         r"काळी\s*यादी",
     ),
     supports=_rx(r"\bblack\s*-?\s*list", r"\bdebarr", r"\bbanned\b"),
-    # A MahaTender receipt page prints "Debarred/Revoked Details" as a portal heading
-    # (7314254 p.1); the RFP prints the requirement itself. Neither is the bidder's declaration.
+    # A MahaTender receipt page prints "Debarred/Revoked Details" as a portal heading, and the
+    # RFP prints the requirement itself. Neither is the bidder's declaration.
     vetoes=_rx(
         r"debarred\s*/\s*revoked\s+details",
         r"should\s+not\s+have\s+been\s+black",
@@ -401,7 +387,7 @@ NON_BLACKLIST = Concept(
 LEGAL_ENTITY = Concept(
     key="legal_entity",
     label="Legal entity / incorporation",
-    # A CIN ("U72900PN2011PTC139251") and an LLPIN ("AAD-7815") are minted by the Registrar of
+    # A CIN (shape U12345MH2020PTC123456) and an LLPIN (shape ABC-1234) are minted by the Registrar of
     # Companies and by nobody else, so either one proves the bidder is the kind of entity the clause
     # requires without the word "incorporation" appearing anywhere near it.
     identifier=re.compile(r"\b[LUu]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6}\b|\b[A-Z]{3}\s*-\s*\d{4}\b"),
@@ -469,9 +455,9 @@ def resolve(requirement_text: str, *, label: str = "", datatype: str = "") -> Co
 # Identity: who the bidder is, proved by a number only one issuer can mint
 # ----------------------------------------------------------------------------------------------
 
-# A PAN appears 293 distinct ways in twelve bids — "PAN BZSPB8994G", "having PAN : AQRPD4656N",
-# "(PAN BZSPB8994G )", and inside every ITR acknowledgement — and almost never next to the words a
-# requirement uses ("Copy of PAN"). The shape is the evidence.
+# A PAN appears hundreds of ways across a set of bids — after "PAN", "having PAN :", in brackets,
+# inside every ITR acknowledgement — and almost never next to the words a requirement uses ("Copy
+# of PAN"). The shape (five letters, four digits, a letter: ABCDE1234F) is the evidence.
 PAN = Concept(
     key="pan",
     label="PAN",
@@ -513,9 +499,9 @@ MSME = Concept(
     datatype="boolean",
 )
 
-# "DATE OF INCORPORATION / REGISTRATION OF ENTERPRISE 27/12/2019" (Udyam certificate, 7453310 p.4),
-# "Date of commencement of business / 01/02/2013" (MahaTender profile, 7322312 p.48). A requirement
-# asking for "Proof of Existence of Firm from last 5 years" is answered by a date, not a sentence.
+# A Udyam certificate's date of incorporation or registration, or a portal profile's date of
+# commencement of business. A requirement asking for proof that the firm has existed for five
+# years is answered by a date, not a sentence.
 FIRM_AGE = Concept(
     key="firm_age",
     label="Years in business",
@@ -538,7 +524,7 @@ FIRM_AGE = Concept(
 # ----------------------------------------------------------------------------------------------
 
 # "Authorised Signatory" is the footer of every tax invoice, insurance schedule and vendor letter in
-# a bid — nineteen of them in this corpus, on pages about cheque payment and jurisdiction clauses.
+# a bid — on pages about cheque payment and jurisdiction clauses.
 # It is a *support* at most. The instrument itself is what a requirement is asking for.
 SIGNING_AUTHORITY = Concept(
     key="signing_authority",
@@ -687,7 +673,7 @@ AUDITED_ACCOUNTS = Concept(
     datatype="boolean",
 )
 
-# "Tender Fee in ₹ : 6,579" on the MahaTender receipt that opens every bid. A separate payment from
+# The tender fee is printed on the MahaTender receipt that opens every bid. A separate payment from
 # the EMD, and a requirement that asks for both is answered by two different numbers on one page.
 TENDER_FEE = Concept(
     key="tender_fee",
@@ -710,7 +696,7 @@ TENDER_FEE = Concept(
 PROVIDENT_FUND = Concept(
     key="provident_fund",
     label="EPF registration",
-    identifier=re.compile(r"\b[A-Z]{2}[A-Z]{3}\d{7}\d{3}\b"),  # e.g. PUPUN1766515000
+    identifier=re.compile(r"\b[A-Z]{2}[A-Z]{3}\d{7}\d{3}\b"),  # shape: MHABC0012345000
     anchors=_rx(r"employees'?\s+provident\s+fund", r"\bE\.?P\.?F\.?O?\b",
                 r"provident\s+fund\s+code", r"\bEPF\s*(?:&|and)\s*MP\s+act",
         r"भविष्य\s*निर्वाह\s*निधी",
@@ -724,9 +710,9 @@ PROVIDENT_FUND = Concept(
     datatype="boolean",
 )
 
-# The one concept where a negation is the likeliest thing on the page: a bid's EPF intimation letter
-# says "your establishment is not registered with ESIC", and the pages after it are a brochure about
-# the ESI Act addressed to nobody. Both must fail to anchor.
+# The one concept where a negation is the likeliest thing on the page: an EPF intimation letter
+# can state that the establishment is not registered with ESIC, and be followed by a general
+# brochure about the ESI Act addressed to nobody. Both must fail to anchor.
 EMPLOYEE_INSURANCE = Concept(
     key="employee_insurance",
     label="ESIC registration",
@@ -798,9 +784,9 @@ COMPLETION_CERTIFICATE = Concept(
     datatype="boolean",
 )
 
-# Distinct from a head count: this asks whether *named roles* are staffed and with whom. "Project
-# Lead", "UI UX/ Graphic Designer", "Database Administrator" (DBT RFP), "Project Manager 3 Solution
-# Architect 3" (MahaIT marks table), "CV of Key Professionals (Appendix-8)" (PCMC).
+# Distinct from a head count: this asks whether *named roles* are staffed and with whom — a
+# project lead, a designer, a database administrator, a solution architect — often with a CV
+# appendix for each key professional.
 KEY_ROLES = Concept(
     key="key_roles",
     label="Key personnel by role",
@@ -820,9 +806,9 @@ KEY_ROLES = Concept(
     vetoes=_rx(r"shall\s+(?:be\s+)?(?:deploy|depute|appoint|engage|provide)",
                r"will\s+be\s+(?:deployed|appointed|engaged)",
                # Every PMC certificate is signed by one of these, and a works tender names them on
-               # page after page. "अधीक्षक अभियंता (यांत्रिकी) यांच्या योग्यता प्रमाणपत्राची
-               # आवश्यकता" is about the officer who issues a certificate, not about the bidder's
-               # engineers; counting him as proposed personnel staffs the bid from the municipality.
+               # page after page. A sentence about an अधीक्षक अभियंता is about the officer who
+               # issues a certificate, not about the bidder's engineers; counting him as proposed
+               # personnel staffs the bid from the municipality.
                r"(?:अधीक्षक|कार्यकारी|उप|शाखा|सहाय्?यक|उपअ?)\s*अभियंता",
                r"महापालिका|आयुक्त|खानेप्रमुख|कार्यालयाचा",
                r"(?:superintending|executive|deputy|assistant)\s+engineer"),
@@ -877,9 +863,9 @@ BY_KEY = {c.key: c for c in ALL}
 # The bid's own paperwork
 # ----------------------------------------------------------------------------------------------
 
-# Every RFP asks for a set of signed letters whose names differ per tender — "Pre-Qualification Bid
-# Covering letter", "Technical Bid Letter", "PRICE AND VALIDITY", "QUALIFYING DATA", "BID PRICE",
-# "DEVIATIONS". They are all one thing: the covering letter the bidder signs, reproducing the
+# Every RFP asks for a set of signed letters whose names differ per tender — a pre-qualification
+# covering letter, a technical bid letter, forms for price and validity, qualifying data,
+# deviations. They are all one thing: the covering letter the bidder signs, reproducing the
 # tender's own form. The bid answers with the body of that form, which is why the anchors are the
 # sentences a covering letter is made of rather than the headings a tender gives them.
 BID_FORMS = Concept(
@@ -906,8 +892,8 @@ BID_FORMS = Concept(
     negations=None,
 )
 
-# "General Details of the Bidder (Appendix-3)", "Registered office address", "Primary Contact Person
-# (Name, Designation, address, mobile number, fax, email)". Anchored on the *labels* a bidder's
+# A bidder's particulars sheet: general details, registered office address, a primary contact
+# person with designation, phone and e-mail. Anchored on the *labels* a bidder's
 # particulars sheet prints, not on an address or an email — those are on every letterhead in the
 # submission and would make this concept match everything.
 BIDDER_PARTICULARS = Concept(
@@ -937,10 +923,9 @@ BIDDER_PARTICULARS = Concept(
     datatype="boolean",
 )
 
-# An experience requirement worded as prose rather than as a counted threshold: "A Bidder should
-# have an experience of having successfully completed Any One (01) of the following" (MahaIT),
-# "List of completed/on-going assignments of similar nature" (PCMC), "Bidders Experience-Client
-# Citations" (DBT). The *measured* form of this is read by `work_proof`, which returns values and
+# An experience requirement worded as prose rather than as a counted threshold — completed any one
+# of a list of projects, a list of completed or ongoing assignments of similar nature, client
+# citations. The *measured* form of this is read by `work_proof`, which returns values and
 # dates; this covers the form that only asks whether the experience is evidenced at all.
 PROJECT_EXPERIENCE = Concept(
     key="project_experience",

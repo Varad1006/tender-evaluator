@@ -422,8 +422,11 @@ def evaluate_criterion(spec: CriterionSpec, claims: list[Claim], requirement_quo
         if handler is not None:
             return handler(spec, claims, reference)
         # A criterion whose fact the bid states in its own vocabulary is read before the generic
-        # numeric path, which can only compare figures that already carry the tender's wording.
-        if spec.operator == ">=":
+        # numeric path, which can only compare figures that already carry the tender's wording —
+        # unless the tender says how its figure is measured. "The best year of the last five, brought
+        # to current prices" is a window and an escalation the requirement carries in its params;
+        # the generic "best figure stated" knows neither and would credit a year outside the window.
+        if spec.operator == ">=" and spec.params.get("basis") != "max_annual":
             concept_verdict = _concept_verdict(spec, claims, requirement_quote, llm)
             if concept_verdict is not None:
                 return concept_verdict

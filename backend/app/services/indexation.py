@@ -3,8 +3,8 @@
 PMC works tenders do not compare a bidder's past turnover or past project values at face value.
 Clause 4 of the qualification criteria prints a table beside each financial criterion:
 
-    Turnover of previous years shall be given weightage of 10% per year based on Rupee value to
-    bring them to current year price level.
+    Figures of earlier years carry a weightage of 10% per year, to bring them to the current
+    year's price level.
 
         Financial year   Multiplying Factor
         2024-2025        1.10
@@ -17,7 +17,7 @@ and the same table governs three separate criteria: maximum annual turnover, the
 completed similar works, and the `A` term of the bid-capacity formula.
 
 Ignoring it is not a rounding error. A bidder whose best year was ₹30 lakh in FY 2022-23 is
-being offered ₹39.9 lakh by the tender's own rule; against a ₹36.55 lakh threshold that is the
+being offered ₹39.9 lakh by the tender's own rule; against a ₹35 lakh threshold that is the
 difference between disqualified and qualified. Reading the raw figure produces a **wrong FAIL**,
 which is the one outcome this tool must never produce on its own arithmetic.
 
@@ -158,9 +158,9 @@ def parse_index_table(text: str, page: int, document_id: str | None = None,
                       document_id=document_id, doc_name=doc_name, consistent=consistent, notes=notes)
 
 
-# The rule in prose with no table beside it. PMC's tender-procedure circular says "उलाढाल, कामाची
-# किंमत इत्यादीची परिगणना चालू दराने करताना प्रतिवर्षी १०% वाढ विचारात घेण्यात येईल" — turnover, the
-# cost of works and so on, worked out at current rates, with a 10% increase for each year.
+# The rule in prose with no table beside it: PMC's tender-procedure circular asks for turnover, the
+# cost of works and so on to be worked out at current rates with a प्रतिवर्षी १०% वाढ (a 10%
+# increase for each year).
 _PROSE_RATE = re.compile(
     r"प्रतिवर्षी\s*(?P<mr>[०-९\d]{1,2}(?:\.[०-९\d]+)?)\s*%\s*वाढ"
     r"|(?:weightage|increase|escalation|enhancement)\s+of\s+(?P<en>\d{1,2}(?:\.\d+)?)\s*%\s*per\s*(?:year|annum)",

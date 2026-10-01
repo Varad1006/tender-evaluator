@@ -201,13 +201,13 @@ def read_bid_capacity(text: str) -> dict | None:
     unit_m = _BC_UNIT.search(t)
     unit = (100_000.0 if unit_m.group("lakh") else 10_000_000.0) if unit_m else 1.0
     if unit == 1.0:
-        # "A=44.77 Lacs", "Rs. 47.16 lakhs": the unit written beside the figures, not in a heading.
+        # "A=30.00 Lacs", "Rs. 12.50 lakhs": the unit written beside the figures, not in a heading.
         near = re.search(r"\d\s*(?P<lakh>lakhs?|lacs?)\b|\d\s*(?P<crore>crores?)\b", t, re.I)
         if near:
             unit = 100_000.0 if near.group("lakh") else 10_000_000.0
     a, b = _first(_BC_A, t), _first(_BC_B, t)
-    # "A=44.77 Lacs … (44.77*1.5=67.16) updated to 2024-25 price level": a working that states two
-    # values for A has not decided which one it uses. The committee decides; we do not pick.
+    # "A = 30.00 Lacs … (30.00 × 1.5 = 45.00) brought to current price level": a working that states
+    # two values for A has not decided which one it uses. The committee decides; we do not pick.
     a_values = sorted({float(m.group(1)) for pat in _BC_A for m in pat.finditer(t)}
                       | {float(x) for x in re.findall(r"\bA\s*=[^\n]{0,40}?=\s*(\d+(?:\.\d+)?)", t)})
     ambiguous_a = len(a_values) > 1 and (max(a_values) - min(a_values)) > 0.01 * max(a_values)

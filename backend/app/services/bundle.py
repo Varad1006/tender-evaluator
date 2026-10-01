@@ -56,7 +56,7 @@ class BundleError(Exception):
 class BundleFile:
     path: Path
     name: str
-    origin: str  # e.g. "work_2291063.zip › Tenderdocuments.rar › DATASHEET.pdf"
+    origin: str  # e.g. "work_1234567.zip › Tenderdocuments.rar › DATASHEET.pdf"
     kind: str = ".pdf"  # sniffed from content: .pdf | .xls | .xlsx
 
 

@@ -99,8 +99,8 @@ def find_turnover(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
 
 
 # A chartered accountant's turnover certificate lists one figure per financial year, as a ruled
-# table ("2020-2021 | 3,43,19,907/-"), a bulleted list ("Financial Year 2019-20 Rs. 1,87,87,157/-")
-# or a numbered one ("1 | 2022-23 | 0"). Each year is its own claim, because the tender asks for the
+# table ("2022-2023 | 1,23,45,000/-"), a bulleted list ("Financial Year 2021-22 Rs. 98,76,500/-")
+# or a numbered one ("1 | 2023-24 | 0"). Each year is its own claim, because the tender asks for the
 # maximum over five years and that maximum is decided only after the year's escalation factor is
 # applied — an older, smaller year routinely wins.
 _TURNOVER_CONTEXT = re.compile(r"turn\s?over", re.IGNORECASE)
@@ -181,9 +181,9 @@ def find_turnover_series(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim
 
 # The bid-capacity certificate is the one piece of bidder evidence that is itself a calculation, so
 # it can disagree with the tender in ways a plain figure cannot: a different formula, a different
-# completion period, a different price-level base, or an age that puts it out of validity. Two of
-# the nine Warje bidders' certificates are computed on the PWD formula (A x N x 2 - B) and addressed
-# to the Public Works Department, with an explicit "shall not be used for any other purpose".
+# completion period, a different price-level base, or an age that puts it out of validity. Some
+# certificates are computed on the PWD formula (A x N x 2 - B) and addressed to the Public Works
+# Department, with an explicit statement that they may not be used for any other purpose.
 _BID_CAPACITY_CONTEXT = re.compile(r"bid(?:ding)?\s*capacity", re.IGNORECASE)
 _BC_TOTAL = re.compile(
     r"(?:total\s*bid\s*capacity|assessed\s*available\s*bid\s*capacity|bid\s*capacity)"
@@ -206,7 +206,7 @@ def find_bid_capacity(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
     out: list[Claim] = []
     for page in pages:
         p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
-        # A page's text keeps table rows intact ("Total Bid Capacity (In Rs.) | 6,78,75,525"),
+        # A page's text keeps table rows intact ("Total Bid Capacity (In Rs.) | 5,43,21,000"),
         # where the label and the figure are separate cells and so separate sentences.
         lines = (p.text or "").splitlines() if p else [s.text for s in doc.sentences if s.page == page]
         blob = " ".join(lines)
@@ -516,30 +516,42 @@ def _finder_for(spec: CriterionSpec):
     return find_generic_document if spec.key.startswith("doc_") else None
 
 
-def extract_bidder(doc: ParsedDocument, specs: list[CriterionSpec], filename: str, llm=None) -> BidderExtraction:
-    claims: list[Claim] = []
-    warnings: list[str] = []
-    for spec in specs:
-        finder = _finder_for(spec)
-        try:
-            if finder:
-                claims.extend(finder(doc, spec))
-            elif llm is not None:
-                claims.extend(llm_find_evidence(llm, doc, spec))
-            elif spec.params.get("terms"):
-                claims.extend(find_generic_document(doc, spec))
-        except Exception as exc:  # one criterion's failure must never block the others (NFR6)
-            log.exception("Extraction failed for %s", spec.key)
-            warnings.append(f"Extraction failed for '{spec.label}': {exc}")
-    claims.extend(find_quoted_price(doc))
+def claims_for(doc: ParsedDocument, spec: CriterionSpec, llm=None) -> tuple[list[Claim], list[str]]:
+    """The evidence for one criterion in `doc` (which may be a view showing only the documents
+    fetched for it), and any warning. One criterion's failure never blocks the others (NFR6)."""
+    finder = _finder_for(spec)
+    try:
+        if finder:
+            return list(finder(doc, spec)), []
+        if llm is not None:
+            return list(llm_find_evidence(llm, doc, spec)), []
+        if spec.params.get("terms"):
+            return list(find_generic_document(doc, spec)), []
+    except Exception as exc:
+        log.exception("Extraction failed for %s", spec.key)
+        return [], [f"Extraction failed for '{spec.label}': {exc}"]
+    return [], []
 
+
+def dedupe(claims: list[Claim]) -> list[Claim]:
     seen, unique = set(), []
     for c in claims:
         k = (c.criteria_key, c.page, c.quote, c.detail.get("part"))
         if k not in seen:
             seen.add(k)
             unique.append(c)
-    return BidderExtraction(bidder_name=find_bidder_name(doc, filename), claims=unique, warnings=warnings)
+    return unique
+
+
+def extract_bidder(doc: ParsedDocument, specs: list[CriterionSpec], filename: str, llm=None) -> BidderExtraction:
+    claims: list[Claim] = []
+    warnings: list[str] = []
+    for spec in specs:
+        found, warned = claims_for(doc, spec, llm)
+        claims += found
+        warnings += warned
+    claims.extend(find_quoted_price(doc))
+    return BidderExtraction(bidder_name=find_bidder_name(doc, filename), claims=dedupe(claims), warnings=warnings)
 
 
 # PMC works criteria read from a bid's documents (EMD receipt, registration, bid-capacity working,
@@ -618,7 +630,7 @@ def find_net_worth(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
 
     out = _series_claims(doc, spec, NET_WORTH, NETWORTH_LABEL)
 
-    # Prose: "the net worth of M/s X as on 31.03.2025 is Rs. 3,32,00,000/-".
+    # Prose: "the net worth of M/s X as on 31.03.2025 is Rs. 2,10,00,000/-".
     for s in doc.sentences:
         if NET_WORTH.hit(s.text) != "anchor":
             continue
@@ -708,9 +720,8 @@ _DECLARED = re.compile(
 def find_staff_strength(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
     """How many people the bidder has, by every route the submission offers.
 
-    The requirement counts "IT Professionals on an on-roll staff strength"; the bid answers with
-    "technically qualified professionals on companies' payroll", a declared "50+", and a numbered
-    roster that reaches 66 (DBT bid pp.75-77). All three are returned as separate claims — the
+    The requirement counts "IT professionals on an on-roll staff strength"; a bid answers with
+    "qualified engineers on our payroll", a declared "40+", and a numbered roster of names. All three are returned as separate claims — the
     declared figure because it is what the bidder asserts, the roster because it is the only one
     that can be counted, and the tabulated staff statement because works bids use that instead.
     """
@@ -816,9 +827,9 @@ CONCEPT_FINDERS["net_worth"] = find_net_worth
 CONCEPT_FINDERS["staff_strength"] = find_staff_strength
 
 # The original turnover finder matched any sentence containing the word, which includes a bid's own
-# contents checklist: "Copy of the audited total turnover, net-worth and Profit & Loss for financial
-# years 2022-23 ... Page No.80-89" was read as a turnover of ₹2,022 and disqualified a bidder whose
-# certificate states ₹4.25 crore. The concept-aware reader refuses checklists.
+# contents checklist: a row naming the audited turnover statement next to its page numbers was
+# read as a turnover of two thousand rupees, and disqualified a bidder whose certificate states
+# crores. The concept-aware reader refuses checklists.
 FINDERS["avg_turnover"] = find_turnover_concept
 
 
@@ -836,9 +847,9 @@ def _is_contents_page(page) -> bool:
     """Is this the page where the bid lists what it contains?
 
     The rows of such a list are usually a ruled table, so `page.lines` holds only the heading and a
-    letterhead footer — four lines on the DBT bid's first page, which no ratio of listed lines can
-    detect. The heading is the reliable signal and it is right there: "Checklist for the documents to
-    be included in the Pre-Qualification (PQ) Folder", with a "Compliance(Yes/No)" column beside it.
+    letterhead footer — a few lines on a bid's first page, which no ratio of listed lines can
+    detect. The heading is the reliable signal and it is right there: a "checklist of documents"
+    heading, usually with a compliance (yes/no) column beside it.
     """
     text = page.text or ""
     header = " ".join(" ".join(r[:1] + r[-1:]) for rows in (page.tables or []) for r in rows[:2])
@@ -1015,9 +1026,9 @@ def find_concept_presence(doc: ParsedDocument, spec: CriterionSpec) -> list[Clai
     return (exact + on_page) or weak
 
 
-# A date the firm came into being, and the years since. "DATE OF INCORPORATION / REGISTRATION OF
-# ENTERPRISE 27/12/2019" on a Udyam certificate, "Date of commencement of business / 01/02/2013" on
-# a MahaTender profile — the requirement ("Proof of Existence of Firm from last 5 years") is
+# A date the firm came into being, and the years since: the date of incorporation or registration
+# on a Udyam certificate, the date of commencement of business on a portal profile — the
+# requirement (proof that the firm has existed for some years) is
 # answered by a date, and the comparison needs the number of years it implies.
 _DATE = re.compile(r"\b(\d{1,2})[./\-](\d{1,2})[./\-]((?:19|20)\d{2})\b")
 _MONTH_DATE = re.compile(

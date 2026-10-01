@@ -20,11 +20,11 @@ MULTIPLIERS = {"crore": 10_000_000, "crores": 10_000_000, "cr": 10_000_000,
 
 # Bidder submissions are scans, and their text layers break Indian digit grouping in two ways.
 #
-#   "Rs. 1,87 ,87 ,157/-"   a group separated by stray spaces. The spaces carry no information,
-#                           so they are removed. Matching only "1,87" here returned ₹187 for a
-#                           ₹1.87 crore turnover — a hundred-thousand-fold error, in the direction
-#                           that disqualifies a bidder (Vimal Enterprises' CA certificate, p.7).
-#   "Rs. 7O,62,407/-"       a letter standing in for a digit. This is NOT repaired: "O" is a 0
+#   "Rs. 1,45 ,60 ,250/-"   a group separated by stray spaces. The spaces carry no information,
+#                           so they are removed. Matching only "1,45" here would return ₹145 for a
+#                           ₹1.46 crore turnover — a hundred-thousand-fold error, in the direction
+#                           that disqualifies a bidder.
+#   "Rs. 5O,12,300/-"       a letter standing in for a digit. This is NOT repaired: "O" is a 0
 #                           here and a 6 elsewhere, and inventing the digit would put a number the
 #                           document never states under a page citation. The amount is refused,
 #                           which costs a lookup; guessing it costs a wrong verdict.
@@ -120,8 +120,8 @@ def parse_amounts(text: str) -> list[Amount]:
     return _scan_amounts(text)[0]
 
 
-# A comma-grouped token whose groups are not all numeric: "L,26,40 ,423" for 1,26,40,423, and
-# "2, L7 ,12,07 4" for 2,17,12,074. Commas are what make this safe to look for — a PAN, a UDIN and
+# A comma-grouped token whose groups are not all numeric: "L,35,20 ,614" for 1,35,20,614, and
+# "3, L4 ,56,08 2" for 3,14,56,082. Commas are what make this safe to look for — a PAN, a UDIN and
 # a firm registration number all mix letters and digits, and none of them is comma-grouped. Three
 # groups are required rather than two: "Flat No. 402, D Wing" and "September 17, 2025" have one
 # comma each, and at lakh scale and above an Indian amount always has at least two.
@@ -233,8 +233,8 @@ _SCALES = {"hundred": 100, "thousand": 1_000, "lakh": 100_000, "lakhs": 100_000,
 def words_to_amount(text: str) -> float | None:
     """Indian-system amount in words -> number.
 
-    "Four Lakhs Twenty Three Thousand Six Hundred Forty Seven Rupees" -> 423647
-    "One Crore Eighty Lakhs ... Six Rupees and Twenty Five Paise"      -> 18049886.25
+    "Five Lakhs Twelve Thousand Eight Hundred Thirty Rupees"           -> 512830
+    "Two Crore Ten Lakhs ... Five Rupees and Fifty Paise"              -> 21000005.50
     Returns None when the text contains no number words.
     """
     m = re.search(r"\band\s+([a-z\s]+?)\s+paise\b", text, re.I)

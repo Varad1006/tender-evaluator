@@ -10,7 +10,7 @@ upload (zip / rar / pdf / xls, several at once)
    │
    ▼
 0. UNPACK            bundle.expand ─ recursive zip/rar (bsdtar), zip-slip guard, skips __MACOSX/dotfiles,
-   │                 keeps an origin trail: "work_2291063.zip › Tenderdocuments.rar › DATASHEET.pdf"
+   │                 keeps an origin trail: "work_1234567.zip › Tenderdocuments.rar › DATASHEET.pdf"
    ▼
 1. LOCAL TIER (seconds, free, parallel per document)
    ├─ quick scan      pdfium, every page (~2 ms/page): text + readability class + "is this a scan?"
@@ -79,14 +79,14 @@ clauses directly and the English criterion label comes from the PMC standard. A 
 * **Typed text and spreadsheets outrank OCR** (which includes handwriting); OCR outliers are reported.
 * **PMC security deposit**: a 4 % figure and a 5 % figure are consistent (1 % EMD is converted).
 * **The tender's own stated threshold governs; the formula is a cross-check.** The engine explains
-  mismatches: the "Rs.423647 Lakhs" template unit error, blanks left unfilled, and tenders that compute
+  mismatches: the template unit error (a rupee figure printed with "Lakhs"), blanks left unfilled, and tenders that compute
   on the GST-inclusive cost instead of the cost put to tender.
 * **A corrigendum supersedes.** A short document titled Corrigendum / Addendum / शुद्धिपत्रक is its own
   role; its revised values ("Existing | Revised" tables, "… revised to Rs. …") win, and the fact shows
   "Changed by corrigendum" with the original value noted — never a conflict.
-* **A clause's label does not settle which base it used.** "1% of the tender cost (Total Estimated
-  Cost)" is in fact 1% of the cost put to tender excluding GST, in the one bundle where both figures
-  and the resulting EMD are all printed. Bases are decided by trying both and reporting which one
+* **A clause's label does not settle which base it used.** A clause naming the "total estimated
+  cost" can turn out to mean the cost put to tender excluding GST, as a bundle that prints both
+  figures and the resulting EMD shows. Bases are decided by trying both and reporting which one
   the tender's own figure matches, never by the wording.
 * **Past money is compared after indexation.** Where the tender prints multiplying factors by
   financial year, turnover, completed-work values and the bid-capacity `A` term are escalated to
@@ -118,25 +118,23 @@ clauses directly and the English criterion label comes from the PMC standard. A 
 
 ## Accuracy harness
 
-`tests/data/corpus_truth.json` holds values verified by reading the pages (297 checks over 17
-tenders: facts, thresholds, similar-work options, key quantities, personnel, required and forbidden
-labels). `scripts/score_corpus.py` scores a `corpus_report.py --json` run against it, and
-`tests/test_corpus_golden.py::test_accuracy_against_ground_truth_with_cached_ocr` replays the OCR
-cache offline and fails on any miss. A tender in the ground truth but not in this machine's corpus
+`tests/local/corpus_truth.json` holds values verified by reading the pages (facts, thresholds,
+similar-work options, key quantities, personnel, required and forbidden labels). It is read from
+real tenders, so it is git-ignored and stays on the machine that has them. `scripts/score_corpus.py`
+scores a `corpus_report.py --json` run against it, and
+`tests/local/test_corpus_golden.py::test_accuracy_against_ground_truth_with_cached_ocr` replays the
+OCR cache offline and fails on any miss. A tender in the ground truth but not in this machine's corpus
 folder is skipped rather than counted as a miss, so the truth can grow ahead of any one download.
 
-Current: **243 / 243** on the original 13 tenders + RFP, **54 / 54** on the three added in
-Sep 2026 (work_2286446, PCMC encroachment RFP, PMC DBT RFP), and **81 / 81** on three PMC Zone-1
-bundles added in Oct 2026 (work_2293837, work_2293890, work_2293934). Besides values, the scorer
+Current: **378 / 378** checks over 20 tenders (13 PMC works bundles and an IT RFP first, three more
+bundles and RFPs in September 2026, three PMC zone bundles in October 2026). Besides values, the scorer
 checks that a criterion is located rather than derived, that the escalation rate is carried, and
 that a threshold states no number when an input it needs is missing from the bundle.
 
-The three added tenders score **51 / 54 from the local text layer alone**. The hybrid tier closes
-the gap: work_2286446's key BOQ quantities are handwritten on a scanned data-sheet page, and
-Chandra reads them exactly ("NP-III RCC Pipe - 600mm | 99 | Rmt"). OCR also recovers that bundle's
-Marathi work name, its tender category, contract type B1 and pre-bid flag, and moves the turnover,
-similar-works and bid-capacity citations onto the signed qualification sheet they actually come
-from. 45 pages, about 70 s, cached thereafter.
+From the local text layer alone the September additions scored 51 of 54; the hybrid tier closes the
+gap. In one drainage bundle the key BOQ quantities are handwritten on a scanned data sheet, and
+Chandra reads them exactly; OCR also recovers that bundle's Marathi work name, category, contract
+type and pre-bid flag, and moves the financial citations onto the signed sheet they come from.
 
 `tests/test_phrasing_corpus.py` is the other half of the instrument: how authorities word each
 requirement, and — the important half — the wordings that must **not** be read as one. A tender that
@@ -162,7 +160,7 @@ upload envelope(s)   one zip = one bidder (several files per bidder allowed; .pd
    ▼
 1. LOCAL TIER        bundle.expand + local_pass(role="bidder"): same quick scan and readability classes
    ▼
-2. PAGE TYPING       21 document types, English and Marathi, decided by the page's heading
+2. PAGE TYPING       22 document types, English and Marathi, decided by the page's heading
    │                 (first ~700 chars) — a passing mention elsewhere does not type a page.
    │                 Sworn statements (हमीपत्र / प्रतिज्ञापत्र / affidavit) are typed first: they
    │                 restate every criterion. A continuation page inherits its predecessor's type.
@@ -171,11 +169,64 @@ upload envelope(s)   one zip = one bidder (several files per bidder allowed; .pd
    │                 and every turnover / bid-capacity certificate (their figures decide verdicts);
    │                 capped per bid (TE_OCR_MAX_PAGES_PER_BIDDER, 300); pages left unread are listed
    ▼
-4. EVIDENCE          one finder per criterion, over the pages of the right type first
-   │                 → claims, each with page + verbatim quote + detail used by the rule
+4. FETCH             each tender requirement → the bid's documents that answer it (below)
    ▼
-5. VERDICTS          evaluation.py — arithmetic in code, one handler per PMC criterion
+5. EVIDENCE          one reader per criterion, over the documents fetched for it first
+   │                 → claims, each with page + verbatim quote + the document it was read from
+   ▼
+6. VERDICTS          evaluation.py — arithmetic in code, one handler per PMC criterion
 ```
+
+## Fetching a bidder's documents by what the tender requires
+
+The tender decides what is fetched from a bid; nothing about any particular bid is known in advance.
+`app/services/document_fetch.py` joins the two sides:
+
+```
+TENDER criteria ──► 1. REQUIREMENT PLAN      each requirement → the kinds of document that prove it
+                       (by criterion; else by what it is about — concepts.resolve; else by the
+                        tender's own words for the document)
+BID files ────────► 2. INVENTORY             every document in the bid: kind, file, pages, title,
+                       (pages typed by heading; a run of one kind is one document unless a page
+                        carries its own heading, which starts the next)
+                    3. FETCH                 each requirement → its documents, ranked: what states
+                       the fact (primary, or a page headed with the document asked for), then what
+                       corroborates it; status found / supporting only / not in bid / not a gate
+                    4. READ                  evidence is read from the fetched documents first, then
+                       the supporting ones, and only then the whole bid — and every figure records
+                       which document it came from
+```
+
+| requirement | documents fetched (primary · supporting) |
+|---|---|
+| EMD | EMD payment receipt |
+| registration | contractor registration certificate |
+| turnover | CA turnover certificate (also a letterhead over a year grid), audited accounts · ITR |
+| bid capacity | bid-capacity certificate · turnover certificate, works in hand |
+| similar works | work completion certificates, completed-works statement · BOQ certificates, work orders |
+| key quantities | BOQ certificates, completion certificates · completed-works statement |
+| no joint venture | JV / consortium agreement, constitution, registration, GST · affidavits |
+| an RFP's own requirement | by concept (PAN, GST, Udyam, declarations, staff, audited accounts …), else by the page whose heading carries the tender's words for the document |
+
+Three rules keep it honest:
+
+* **Nothing is guessed.** A requirement with no matching document says so ("no turnover certificate
+  in this bid"); a figure found elsewhere is marked as found outside the documents the requirement
+  asks for.
+* **An absence is checked everywhere.** "No joint venture" is answered by what is *not* in the bid,
+  so it is always read across the whole bid; its documents are fetched and shown, never used to
+  narrow the search. A JV agreement is a document kind of its own, so it can never inherit the type
+  of the certificate in front of it.
+* **Whose name a document carries is not judged here.** The firm named on a page may be its issuer
+  (a chartered accountant), a stamp vendor or the bidder; a warning that is usually wrong would
+  mislead. Work certificates issued to another contractor are flagged by `work_proof`, from the
+  certificate's own wording.
+
+On ten real bid envelopes every requirement's documents were found (turnover for nine on the first
+run; the tenth was a CA letterhead over a bare year grid, now recognised), and the evidence for
+EMD, registration, bid capacity, turnover, similar works and key quantities is read from the
+fetched documents. The bidder card lists each requirement with its documents, linked to the page,
+and every verdict's evidence says which fetched document it was read from.
 
 ## Matching a requirement to a bid that words it differently
 
@@ -184,8 +235,10 @@ share a word, and nothing in a submission is labelled with the tender's wording:
 
 | | |
 |---|---|
-| tender (DBT RFP p.15) | "an **on-roll staff strength** of a minimum of 30 **IT Professionals** having Core Expertise in Software Development" |
-| bid (p.75) | "Undertaking for number of **technically qualified professionals on companies' payroll** … our organization has **50+** technically qualified professionals" |
+| tender | "an **on-roll staff strength** of at least 25 **IT professionals**" |
+| bid | "we confirm that **40+** qualified engineers are **on our payroll**", over a numbered roster |
+
+(an invented pair with the shape real documents show)
 
 Searching for the requirement's words finds nothing, and the criterion comes back unknown on a
 submission that answers it twice over. `app/services/concepts.py` closes that gap. A requirement is
@@ -195,11 +248,11 @@ kinds:
 * **anchors** name the fact alone — "Net-Worth", "Annual Turnover", "on companies' payroll".
 * **supports** are consistent with it but name other things too — "Revenue from Operations" is the
   turnover line of a P&L and also appears in notes and schedules. A support needs corroboration.
-* **vetoes** name the fact in text that states no value of it. Every bid carrying a tax invoice
-  carries "it shall be accounted for in the turnover of sales while filing of return"; every bid
-  opens with a contents list naming each certificate beside a page range. Read as evidence, one
-  such row reported a net worth of **₹2,022** for a company certifying ₹3.32 crore — cited to a
-  real page, and enough to disqualify it. A veto outranks any anchor on the same span.
+* **vetoes** name the fact in text that states no value of it. Every tax invoice carries the
+  standard GST declaration about accounting for supplies in turnover; every bid opens with a
+  contents list naming each certificate beside a page range. Read as evidence, such a row turns a
+  financial year into a net worth of two thousand rupees — cited to a real page, and enough to
+  disqualify a company certifying crores. A veto outranks any anchor on the same span.
 
 Finders are dispatched **by concept, not by criterion key**: the keys are generated from the clause
 they were read in, so the same requirement arrives as `avg_turnover` on one tender,
@@ -266,9 +319,9 @@ Thirty concepts, harvested from what five real RFPs ask for rather than imagined
 
 Across 72 criteria extracted from three RFPs, 66 (92%) now reach a concept-aware or dedicated
 reader, against 20 (28%) before. The six that do not are not requirements a concept should cover:
-one open-ended catch-all ("Any other supporting credential/documents"), one that belongs to the
-marks stage ("Technical Evaluation Score"), and four that are **scope headings the tender-side
-extractor wrongly turned into document requirements** ("Design Phase", "Project Duration"). That
+one open-ended catch-all for other supporting documents, one that belongs to the marks stage (the
+technical score), and four that are **scope headings the tender-side extractor wrongly turned into
+document requirements** (a design phase, a project duration). That
 last group is an over-extraction defect on the tender side, not a gap on the bid side.
 
 Three mechanisms do most of the work:
@@ -276,16 +329,16 @@ Three mechanisms do most of the work:
 * **An identifier is self-proving.** A PAN, GSTIN, CIN, LLPIN, Udyam number or EPF code is
   recognisable by shape alone, so the fact is located without depending on any word near it — which
   matters because the word is usually in a column header two cells away, or on a scan OCR misread.
-* **A negation outranks every anchor.** One bid's EPF office writes "your establishment is **not
-  registered with ESIC**", and the two pages after it are a general brochure about the ESI Act.
+* **A negation outranks every anchor.** An EPF intimation letter can state that the establishment is
+  **not registered with ESIC**, followed by a general brochure about the ESI Act.
   Every word a search for ESIC registration looks for is present, and the document says the bidder
   does not have it. A veto says "this text is not about the fact"; a negation says "this text is
   about the fact and says no". Concepts that *are* a negative declaration ("we have not been
   blacklisted") opt out.
 * **A concept locates a kind of fact, not an instance.** "Project Lead" and "Database
   Administrator" are the same kind of fact, so only the clause's own distinctive words can separate
-  them. Without that, a roster row reading "Diploma in Graphic Designer" was cited as evidence of a
-  Database Administrator. Evidence of the right kind on a page naming nothing the clause asked for is
+  them. Without that, a roster row for a graphic designer was cited as evidence of a database
+  administrator. Evidence of the right kind on a page naming nothing the clause asked for is
   still shown — but it yields `unknown`, never a pass.
 
 And the page a bid lists its own contents on is never evidence: a bid asserting that it encloses a
@@ -300,12 +353,12 @@ that carry the turnover, net worth and profit series. `year_tables.grid_from_lin
 structure from the token pattern — a line naming *k* financial years declares *k* columns, and a
 line ending in *k* figures fills them. The same routine works on an OCR'd page, which arrives as
 lines of text with no coordinates at all. The unit is taken from whichever header or caption row
-states it ("Amt (Rs. in lakhs)"), because read without it a turnover of ₹4.07 crore is reported as
-₹407 and the bidder fails a ₹4 crore requirement on a unit.
+states it ("amount in lakhs"), because read without it a turnover of ₹5.12 crore is reported as
+₹512 and the bidder fails a ₹4 crore requirement on a unit.
 
 ### Counting people
 
-Three independent routes, all returned as separate claims: a declared count ("50+"), the roster's
+Three independent routes, all returned as separate claims: a declared count ("40+"), the roster's
 own highest serial, and a tabulated staff statement. The roster is the only one that can be
 counted, so `rows_read` travels with it as a **floor** — a shortfall below a count taken directly
 from the submission is an artefact of the reading, not the bidder.
@@ -321,7 +374,7 @@ treated as a claim about the submission and verified against it:
    be invented: the page comes from the span the model selected.
 2. **Its quote must be in that span, verbatim.** This is the gate that makes a fabricated figure
    impossible to cite — there is nowhere for it to come from.
-3. **It never does arithmetic.** It reports the figure as printed ("407") and names the unit the
+3. **It never does arithmetic.** It reports the figure as printed ("512") and names the unit the
    document states ("lakhs"); the multiplication is ours.
 4. **The comparison stays in Python**, which is what lets a result say "deterministic check — no AI
    in the comparison" truthfully.
@@ -401,9 +454,10 @@ built on, so this guards against regressions; it does not yet measure accuracy o
 | bundle extraction | `app/services/bundle_extraction.py` |
 | API job (persist local, then OCR) | `app/services/pipeline.py` (`process_tender`) |
 | corpus runner | `scripts/corpus_report.py` |
-| accuracy scorer | `scripts/score_corpus.py` + `tests/data/corpus_truth.json` |
+| accuracy scorer | `scripts/score_corpus.py` + `tests/local/corpus_truth.json` (git-ignored) |
 | bid envelope: bid id, OCR plan, identity, bid date | `app/services/bidder_processing.py` |
-| bid page typing (21 types) | `app/services/bidder_documents.py` |
+| bid page typing (22 types) | `app/services/bidder_documents.py` |
+| requirement-driven document fetching | `app/services/document_fetch.py` |
 | bid evidence: EMD, registration, bid capacity, JV, key quantities | `app/services/bidder_evidence.py` |
 | completed-work certificates (tables, key-value forms, Marathi) | `app/services/work_proof.py` |
 | turnover grids | `app/services/year_tables.py` |

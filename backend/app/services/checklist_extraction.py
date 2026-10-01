@@ -1,10 +1,10 @@
 """Enumerated documentary requirements.
 
 In real PMC tenders most submission requirements are numbered list items under an intro line:
-  * conditions volumes: "CHECK LIST — Following documents ... should be submitted with the tender"
-  * road Volume I: "To qualify for award of this work, the tenderer shall ... furnish the
-    information detailed out below-" followed by items 1-15, running onto the next page
-  * Annexure B: "Undertaking by contractor in Envelop-A ... 1) ... 2) ... 6)" inside one table cell
+  * conditions volumes: a CHECK LIST of the documents to be submitted with the tender
+  * road volumes: a qualification clause (to qualify, the tenderer shall furnish the following)
+    followed by numbered items, running onto the next page
+  * an undertaking annexure whose numbered items "1) ... 2) ... 6)" sit inside one table cell
   * RFPs: a "Pre-Qualification Criteria" table (criterion | documentary evidence | file label)
 The items themselves carry no "shall"/"must", so sentence-level rules never see them.
 
@@ -113,7 +113,7 @@ def _split_inline(text: str) -> list[str]:
 
 
 def _intro_hit(text: str) -> bool:
-    # "… strictly as per the qualification criteria mentioned at 6.4" mentions the criteria; only a
+    # "… as per the qualification criteria in clause 6" mentions the criteria; only a
     # line that ends on them ("Pre-Qualification Criteria:") introduces a list.
     # A wrapped line can end on the phrase mid-sentence, so bare "…criteria" counts only on a short
     # heading-like line.
@@ -186,7 +186,7 @@ def _from_lines(doc: ParsedDocument, readable: set[int]) -> list[ChecklistItem]:
 
 
 def _rejection_grounds(doc: ParsedDocument, readable: set[int]) -> list[ChecklistItem]:
-    """'The tender shall be liable to be rejected outright if; a) ... b) ...' — explicit gating rules."""
+    """A clause listing the grounds on which a tender is rejected outright (a) … b) …) — explicit gating rules."""
     items: list[ChecklistItem] = []
     for page in doc.pages:
         if page.number not in readable:
@@ -217,7 +217,7 @@ YEAR_CELL = re.compile(r"^(?:FY\s*)?20\d\d\s*[-–/]\s*\d{2,4}$|^(?:Year|FY)\s*\
 def _form_or_data_sheet(rows: list[list[str]]) -> bool:
     """Tables with numbered rows that are not requirement lists: a financial-capability format to
     fill in (year columns: '2018-19 | 2019-20 | 2020-21'), or a data sheet of key/value facts
-    ('3 | Tender Fee | Rs.1359/-', '6 | Place, time of opening | As mentioned on e-Tendering …')."""
+    ('3 | Tender Fee | Rs.1000/-', '6 | Place, time of opening | as per the portal …')."""
     if any(sum(1 for c in r if YEAR_CELL.match(c.strip())) >= 2 for r in rows[:3]):
         return True
     numbered = [[c for c in r if c] for r in rows]
@@ -258,7 +258,7 @@ def _from_tables(doc: ParsedDocument, readable: set[int]) -> list[ChecklistItem]
                 number = int(cells[0].rstrip("."))
                 text = cells[1]
                 if CLAUSE_BOX.match(text):
-                    continue  # a boxed conditions clause ("AWARD CRITERIA The Owner may award …")
+                    continue  # a boxed conditions clause ("AWARD CRITERIA …")
                 rest = cells[2:]
                 form_ref = next((c for c in rest if re.fullmatch(r"[A-Z]{2}_\d+", c)), None)
                 evidence = next((c for c in rest if not re.fullmatch(r"[A-Z]{2}_\d+", c)), None)
@@ -297,7 +297,7 @@ def extract_checklist(doc: ParsedDocument, claimed_texts: list[str]):
         forms = [norm] + ([re.sub(r"[^a-z0-9]+", " ", item.evidence.lower()).strip()]
                           if item.evidence and len(text) < 40 else [])
         # The same requirement is often repeated (annexure + envelope summary) with small wording
-        # changes, or cut short by a cell boundary ("No arbitration clause for this workThe").
+        # changes, or cut short by a cell boundary (a word fused to the next cell's first word).
         if slug in seen or any(_same(f, t) for f in forms for t in seen_texts):
             continue
         seen.add(slug)

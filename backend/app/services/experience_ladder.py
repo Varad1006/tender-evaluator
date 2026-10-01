@@ -4,13 +4,14 @@ Every tender in the corpus that asks for proven past experience offers a *choice
 prove it, and always with the same shape: more projects of a lower value, or fewer of a higher
 one. Only the vocabulary changes with the department:
 
-    PMC drainage works   a) Three completed works (sewer/storm water line/retaining wall) costing
-                            not less than amount equal to 40% of the total estimated cost put to
-                            tender.  OR  b) Two … 50%  OR  c) One … 80%
-    PCMC IT services     1. At-least three different projects with each Project value of more than
-                            ₹ 17 Lakhs  OR  2. … two … ₹ 21 Lakhs  OR  3. … one … ₹34 Lakhs
-    PMC IT services      One project of minimum value INR 64 Lakhs …  OR  Two projects of minimum
-                            value INR 40 Lakhs each …  OR  Three projects of … INR 32 Lakhs each
+    works tenders        a) three completed works of the stated nature, each at least 40% of the
+                            estimated cost put to tender  OR  b) two … 50%  OR  c) one … 80%
+    IT services (amounts) three projects of more than ₹ 10 lakh each  OR  two … ₹ 12.5 lakh
+                            OR  one … ₹ 20 lakh
+    IT services (reverse) one project of at least ₹ 40 lakh  OR  two of ₹ 25 lakh each  OR
+                            three of ₹ 20 lakh each
+
+(illustrative figures; the shapes are the ones the corpus shows).
 
 Reading only the first rung — which a single-sentence rule does, because it sees one rung at a
 time — states a requirement three times too strict and disqualifies bidders who satisfy the

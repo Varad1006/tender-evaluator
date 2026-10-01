@@ -4,15 +4,17 @@ Turnover and bid-capacity certificates state their figures as a grid, and the tw
 never share a cell. A turnover certificate puts the year and the amount side by side:
 
     Financial Year | Turnover (Rs)
-    2020-2021      | 3,43,19,907/-
-    2021-2022      | 2,81,82,821/-
+    2022-2023      | 1,23,45,000/-
+    2023-2024      | 1,56,70,500/-
 
 while a bid-capacity working turns the same data ninety degrees and stacks derived rows under it:
 
-    PARTICULARS                 | 2020-2021   | 2021-2022   | 2022-2023
-    Amount of Work During Year  | 3,43,19,907 | 2,81,82,821 | 3,08,42,535
-    Factor For Updating         | 1.40        | 1.30        | 1.20
-    Updated Value of Work       | 4,80,47,870 | 3,66,37,667 | 3,70,11,042
+    PARTICULARS                 | 2021-2022   | 2022-2023   | 2023-2024
+    Amount of Work During Year  | 1,00,00,000 | 1,23,45,000 | 1,56,70,500
+    Factor For Updating         | 1.30        | 1.20        | 1.10
+    Updated Value of Work       | 1,30,00,000 | 1,48,14,000 | 1,72,37,550
+
+(illustrative figures)
 
 Both orientations are read here, and the row label is kept, because which row a number came from
 decides what it means. Reading "Updated Value of Work" as the bidder's turnover would apply the
@@ -32,7 +34,7 @@ from dataclasses import dataclass
 
 from app.services.values import fy_start
 
-# "3,43,19,907/-", "Rs. 41,96,280", "1,26,40,423", "217.12" is NOT money here (it is lakhs in a
+# "1,23,45,000/-", "Rs. 45,60,000", "2,10,00,000", "217.12" is NOT money here (it is lakhs in a
 # different table and is handled by its own header), and "1.40" is a factor.
 _BARE = re.compile(
     r"^\s*(?:rs\.?|inr|₹)?\s*"

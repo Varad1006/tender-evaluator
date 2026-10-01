@@ -3,8 +3,8 @@
 No two bidders prove the same thing the same way. Across eleven real submissions the evidence for
 "works of similar type completed in the last five years" turned up as all of:
 
-  * a **prescribed statement** — "FORM-II, Details of works of similar type and magnitude carried
-    out by the Contractor", a ruled grid whose header the bidder wrote themselves;
+  * a **prescribed statement** — the tender's Form II of works of similar type and magnitude, a
+    ruled grid whose header the bidder wrote themselves;
   * a **completion certificate** from the client authority — a letter with the facts as labelled
     lines, and typically three different amounts on it (accepted tender amount, administrative
     approval, work done amount) that mean different things;
@@ -21,8 +21,8 @@ Three things it refuses, because each one credits a bidder with work they have n
     "tendered for" or "anticipated date of completion" is skipped.
   * **A stipulated date is not an actual date.** Both appear as columns in the same statement.
   * **Income-tax acknowledgements, registration receipts and bank statements are not work proof.**
-    They carry money and dates and sit in the same bundle; one submission's ITR shows a total
-    income of ₹14,75,310 next to a Pune address, which reads exactly like a small completed work.
+    They carry money and dates and sit in the same bundle; an ITR's total income next to an
+    address reads exactly like a small completed work.
 
 Amounts must be whole and plausible. A cell where three columns have collided into one
 ("18,0 6 , 7 3 , 3 7 , 1 5 3 1 8 , 0 3 , 3 4 , 1 8 1") states no number anybody can defend, and is
@@ -323,7 +323,7 @@ _TENDER_NO_YEAR = re.compile(r"(?<![\d/])\d{1,4}\s*(?:Ex\.?)?\s*[-–/.]\s*((?:1
 
 
 def _tender_year(text: str) -> int | None:
-    """A tender number carries the year it was let ("१२७-२०२२", "PMC/DRAINAGE/2025/50"): the work was
+    """A tender number carries the year it was let ("४५-२०२२", "PMC/DRAINAGE/2025/12"): the work was
     finished in that year or later."""
     t = ascii_digits(text or "")
     m = _TENDER_NO_YEAR.search(t)

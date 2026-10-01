@@ -71,7 +71,7 @@ class TenderDocument(Base):
     tender_id: Mapped[str] = mapped_column(ForeignKey("eval_dg_tenders.id", ondelete="CASCADE"))
     position: Mapped[int] = mapped_column(Integer, default=0)
     file_name: Mapped[str] = mapped_column(String(255))
-    origin: Mapped[str] = mapped_column(String(500))  # "work_2291063.zip › Tenderdocuments.rar › DATASHEET.pdf"
+    origin: Mapped[str] = mapped_column(String(500))  # "work_1234567.zip › Tenderdocuments.rar › DATASHEET.pdf"
     file_path: Mapped[str] = mapped_column(String(500))
     file_hash: Mapped[str] = mapped_column(String(64))
     doc_type: Mapped[str] = mapped_column(String(30))

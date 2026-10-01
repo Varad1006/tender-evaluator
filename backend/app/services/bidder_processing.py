@@ -19,7 +19,9 @@ from app.adapters.datalab_ocr import DatalabOcr
 from app.config import settings
 from app.services import tender_processing as tp
 from app.services.bidder_documents import classify_pages, contents, page_type
-from app.services.bidder_extraction import Claim, CriterionSpec, extract_bidder
+from app.services import document_fetch
+from app.services.bidder_extraction import (Claim, CriterionSpec, claims_for, dedupe, find_bidder_name,
+                                             find_quoted_price)
 from app.services.values import ascii_digits, corrupt_amounts
 
 # MahaTender names the technical envelope after the bid: Fee_PreQual_Technical_1234567.zip
@@ -50,8 +52,8 @@ def plan_ocr_all(docs: list[tp.ProcessedDoc]) -> list[tuple[tp.ProcessedDoc, int
         for s in d.scans:
             if s.number in wanted or not s.scanned or s.quality.kind != "english":
                 continue
-            # Chandra reads the grid the embedded layer flattened into prose ("2020-20031 4.52 PMC &
-            # other Contract 2021-2022 7.82 ..."): worth it for the pages every verdict leans on.
+            # Chandra reads the grid that an embedded layer flattened into prose (years and figures
+            # run together with labels): worth it for the pages every verdict leans on.
             if corrupt_amounts(s.text) or page_type(s.text) in ("turnover_certificate", "bid_capacity"):
                 wanted[s.number] = settings.OCR_MODE_SCANNED
         plan += [(d, page, mode) for page, mode in sorted(wanted.items())]
@@ -162,28 +164,71 @@ class BidExtraction:
     types_by_doc: dict[str, list]
     contents_by_doc: dict[str, list]
     warnings: list[str] = field(default_factory=list)
+    # Each requirement's documents in this bid (document_fetch), and the bid's whole inventory.
+    document_map: dict = field(default_factory=dict)
+
+
+# The order evidence is read in: the documents a requirement asks for, then the documents that
+# corroborate it, and only then the whole bid. A requirement stops at the first tier that answers it.
+TIERS = ("documents", "supporting", "whole_bid")
 
 
 def extract(docs: list[tp.ProcessedDoc], specs: list[CriterionSpec], llm=None) -> BidExtraction:
+    """Fetch each requirement's documents from the bid, then read the evidence out of them."""
     claims: list[Claim] = []
     warnings: list[str] = []
     types_by_doc: dict[str, list] = {}
     fallback_names: list[str] = []
-    for d in sorted(docs, key=lambda x: -(len(x.scans) or 0)):
-        if d.parsed is None:
-            continue
+    parsed = [d for d in sorted(docs, key=lambda x: -(len(x.scans) or 0)) if d.parsed is not None]
+    for d in parsed:
         types = classify_pages(d.parsed)
         types_by_doc[d.document_id] = types
         d.parsed.page_types = types  # type: ignore[attr-defined]  (finders look at the right pages)
-        result = extract_bidder(d.parsed, specs, d.name, llm=llm)
-        for c in result.claims:
-            c.detail["document_id"] = d.document_id
-            c.detail.setdefault("page_type", types[c.page - 1] if 0 < c.page <= len(types) else None)
-        claims += result.claims
-        warnings += result.warnings
-        if result.bidder_name and not BID_REF.search(result.bidder_name.replace(" ", "_")):
-            fallback_names.append(result.bidder_name)
     identity = identify(docs, types_by_doc)
+
+    files = [(d.document_id, d.name, d.parsed, types_by_doc[d.document_id]) for d in parsed]
+    inventory = document_fetch.inventory(files)
+    fetched = {r.key: r for r in document_fetch.fetch(document_fetch.plan(specs), inventory, files)}
+
+    remaining = list(specs)
+    for tier in TIERS:
+        answered: set[str] = set()
+        for d in parsed:
+            for spec in remaining:
+                req = fetched.get(spec.key)
+                if tier == "whole_bid":
+                    view, pages = d.parsed, None
+                else:
+                    pages = req.scope(d.document_id, tier) if req else set()
+                    if not pages:
+                        continue
+                    view = document_fetch.masked(d.parsed, pages)
+                found, warned = claims_for(view, spec, llm if tier == "whole_bid" else None)
+                warnings += warned
+                for c in found:
+                    c.detail["document_id"] = d.document_id
+                    c.detail.setdefault("page_type", d.parsed.page_types[c.page - 1]
+                                        if 0 < c.page <= len(d.parsed.page_types) else None)
+                    c.detail["fetch_tier"] = tier
+                    holder = req.holding(d.document_id, c.page) if req else None
+                    if holder is not None:
+                        c.detail["fetched_from"] = {"kind": holder.doc.kind, "label": holder.doc.label,
+                                                    "from": holder.doc.first, "to": holder.doc.last,
+                                                    "role": holder.role}
+                if found:
+                    answered.add(spec.key)
+                claims += found
+        remaining = [s for s in remaining if s.key not in answered]
+        if not remaining:
+            break
+    for d in parsed:
+        claims += [_tagged(c, d.document_id) for c in find_quoted_price(d.parsed)]
+        name = find_bidder_name(d.parsed, d.name)
+        if name and not BID_REF.search(name.replace(" ", "_")):
+            fallback_names.append(name)
+    claims = dedupe(claims)
+    document_map = {"inventory": [doc.as_dict() for doc in inventory],
+                    "requirements": [r.as_dict() for r in fetched.values()]}
     # The portal stamps the payment receipt when the bid is made: the date validity is judged on.
     paid = sorted(c.detail["paid_on"] for c in claims if c.criteria_key in ("pmc_emd", "emd") and c.detail.get("paid_on"))
     if paid:
@@ -191,7 +236,13 @@ def extract(docs: list[tp.ProcessedDoc], specs: list[CriterionSpec], llm=None) -
     if "firm_name" not in identity and fallback_names:
         identity["firm_name"] = {"value": fallback_names[0], "page": None, "document_id": None, "guessed": True}
     return BidExtraction(claims=claims, identity=identity, types_by_doc=types_by_doc,
-                         contents_by_doc={k: contents(v) for k, v in types_by_doc.items()}, warnings=warnings)
+                         contents_by_doc={k: contents(v) for k, v in types_by_doc.items()}, warnings=warnings,
+                         document_map=document_map)
+
+
+def _tagged(c: Claim, document_id: str | None) -> Claim:
+    c.detail["document_id"] = document_id
+    return c
 
 
 def coverage_warnings(docs: list[tp.ProcessedDoc], ocr_available: bool, ocr_errors: list[str] | None = None) -> list[str]:

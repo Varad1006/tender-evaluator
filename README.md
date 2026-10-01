@@ -59,7 +59,7 @@ Run the whole corpus from the command line (OCR results are cached per file hash
 
 ```bash
 uv run python scripts/corpus_report.py "/path/to/Dataset Tenders" --ocr --json report.json
-uv run python scripts/score_corpus.py report.json   # accuracy vs tests/data/corpus_truth.json (297 hand-verified checks)
+uv run python scripts/score_corpus.py report.json   # accuracy vs tests/local/corpus_truth.json (local, git-ignored)
 ```
 
 ### Real bids (MahaTender envelopes)
@@ -70,11 +70,14 @@ added from several PDFs. Each bid is read in the background: page typing (EMD re
 bid-capacity certificates, work-completion and BOQ certificates, affidavits and so on), then OCR of the scanned pages
 (most of a bid; capped by `TE_OCR_MAX_PAGES_PER_BIDDER`, default 300), then evidence per criterion. The page shows each
 bid's firm name and constitution with the page they come from, its bid date, and its contents by document type. When
-every bid is read, **Run Evaluation**. How bids are read and judged: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#bid-envelopes--the-same-hybrid-pipeline-read-for-evidence).
+every bid is read, **Run Evaluation**. Each bidder card also lists the tender's requirements with the documents of the bid
+that answer them (*Documents by requirement*): fetched by what the tender requires, linked to their pages, and the
+place every verdict's evidence is read from first. How bids are read and judged: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#bid-envelopes--the-same-hybrid-pipeline-read-for-evidence).
 
-Bidder documents are used to build and check the rules only. None are in this repository or pre-loaded into the app.
-Their ground truth stays in the git-ignored `backend/tests/local/`, scored by `scripts/bid_report.py` +
-`scripts/score_bids.py`.
+Real tender and bid documents are used to build and check the rules only. Nothing from them — no identifier, name,
+figure or sentence — is in this repository or pre-loaded into the app; tests in the repo use invented data. The
+documents' ground truth and the tests that need them live in the git-ignored `backend/tests/local/` (bids are
+scored by `scripts/bid_report.py` + `scripts/score_bids.py`).
 
 ### Optional: LLM-assisted extraction (Gemini)
 

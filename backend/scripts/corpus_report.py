@@ -1,6 +1,6 @@
 """Run the extraction pipeline over a folder of MahaTender downloads and print what it found.
 
-    uv run python scripts/corpus_report.py "/path/to/Dataset Tenders" [--ocr] [--only work_2291063]
+    uv run python scripts/corpus_report.py "/path/to/Dataset Tenders" [--ocr] [--only work_1234567]
 
 Each top-level work_* folder (or .zip) is treated as one tender bundle. With --ocr the Datalab
 tier runs for pages the local pass cannot read (needs DATALAB_API_KEY; results are cached).

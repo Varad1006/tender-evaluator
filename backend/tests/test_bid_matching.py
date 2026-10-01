@@ -38,11 +38,11 @@ def _claim(key, value, page=1, **detail):
 # --- what each page of a merged scan is -----------------------------------------------------
 
 @pytest.mark.parametrize("text,kind", [
-    ("GOVERNMENT OF MAHARASHTRA PUBLIC WORKS DEPARTMENT CONTRACTOR'S REGISTRATION CERTIFICATE ... in CLASS IV", "registration"),
-    ("PUBLIC WORKS DEPARTMENT UNEMPLOYED ENGINEER'S REGISTRATION CERTIFICATE ... CLASS IV", "registration"),
-    ("पुणे जिल्हा परिषद बांधकाम विभाग नोंदणी प्रमाणपत्र नोंदणी वर्ग - वर्ग-४", "registration"),
-    ("महाराष्ट्र दुकाने व आस्थापना नियम ... पूर्वीचा नोंदणी प्रमाणपत्राचा क्रमांक", "constitution"),
-    ("Chartered Accountants TURNOVER CERTIFICATE This is to certify ...", "turnover_certificate"),
+    ("STATE PUBLIC WORKS DEPARTMENT — CONTRACTOR'S REGISTRATION — valid for works in Class III", "registration"),
+    ("Registration of Unemployed Engineers — certificate — Class II", "registration"),
+    ("जिल्हा परिषद बांधकाम विभाग — ठेकेदार नोंदणी प्रमाणपत्र — वर्ग-३", "registration"),
+    ("दुकाने व आस्थापना नोंदणी — आस्थापनेचे नाव व पत्ता", "constitution"),
+    ("TURNOVER CERTIFICATE — we, the firm's chartered accountants, report its turnover below", "turnover_certificate"),
     ("कार्यकारी अभियंता कार्यालय जावक क्र. दिनांक कामाचा दाखला मे. उदाहरण कन्स्ट्रक्शन यांनी खालील काम पूर्ण केलेले आहेत", "completion_certificate"),
     ("Bank Response On Payment Details Tender Ref No. : PMC/X/2026/1 EMD Fee in ₹ : 10,000", "emd_receipt"),
 ])
@@ -58,12 +58,12 @@ def test_a_passing_mention_does_not_type_a_page():
 
 # --- Marathi work certificates ------------------------------------------------------------
 
-CERT = ("कार्यकारी अभियंता कार्यालय\nदिनांक: १२/०५/२०२५\nकामाचा दाखला\nमे. उदाहरण कन्स्ट्रक्शन, यांनी सन २०२४-२५ या कालावधी मध्ये "
-        "खालील काम समाधानकारक रित्या पूर्ण केलेले आहेत.")
+CERT = ("कार्यकारी अभियंता कार्यालय\nदिनांक: १२/०५/२०२५\nकामाचा दाखला\nमे. उदाहरण कन्स्ट्रक्शन यांनी आर्थिक वर्ष सन २०२४-२५ मध्ये "
+        "खालील कामे पूर्ण केलेली आहेत.")
 CERT_TABLE = [
     ["अ. क्र.", "टेंडर क्र.", "कामाचे नाव", "पुगप तरतूद (लक्ष)", "ठेकेदाराची रक्कम", "वर्क आर्डर जा.क्र.व दि.", "शेरा"],
-    ["1", "११ - २०२४", "प्रभाग क्र. १७ मधील अंतर्गत रस्त्यांचे डांबरीकरण करणे.", "४० लक्ष", "३४,५६,७८९/-", "१२ दि १३.०१.२५", "काम पूर्ण"],
-    ["2", "१२ - २०२४", "प्रभाग क्र. ९ मध्ये ड्रेनेज लाईन टाकणे.", "२५ लक्ष", "२१,००,०००/-", "१३ दि १४.०१.२५", "काम चालू (७०% काम पूर्ण)"],
+    ["1", "४१ - २०२४", "प्रभाग क्र. १७ मधील अंतर्गत रस्त्यांचे डांबरीकरण करणे.", "४० लक्ष", "३३,४४,५५०/-", "१४ दि ०३.०२.२५", "काम पूर्ण"],
+    ["2", "४२ - २०२४", "प्रभाग क्र. ९ मध्ये ड्रेनेज लाईन टाकणे.", "२५ लक्ष", "१८,५०,०००/-", "१५ दि ०४.०२.२५", "काम चालू (७०% काम पूर्ण)"],
 ]
 
 
@@ -71,7 +71,7 @@ def test_a_marathi_certificate_is_read_with_the_accepted_amount_and_the_preamble
     got = _from_table(CERT_TABLE, page=5, ctx=page_context(CERT))
     assert len(got) == 1, "the running work (काम चालू) is not a completed work"
     r = got[0]
-    assert r.value == 3456789 and r.value_label == "ठेकेदाराची रक्कम"  # never the budget provision
+    assert r.value == 3344550 and r.value_label == "ठेकेदाराची रक्कम"  # never the budget provision
     assert r.year == 2024 and (r.year_min, r.year_max) == (2024, 2025)
     assert r.contractor and "उदाहरण" in r.contractor
 
@@ -115,7 +115,7 @@ def test_a_key_value_certificate_is_quoted_by_the_rows_that_decided_it():
 
 def test_certificates_in_another_contractors_name_are_flagged():
     def cert(n, firm, work):
-        text = f"कार्यकारी अभियंता\nदि २५/०१/२०२३\nदाखला देण्यात येतो कि मे {firm} हे मनपा चे मान्यता प्राप्त ठेकेदार असून खालील काम समाधान पूर्वक पूर्ण केलेला तपशील"
+        text = f"कार्यकारी अभियंता\nदि २५/०१/२०२३\nप्रमाणित करण्यात येते की मे {firm} यांनी या कार्यालयाचे खालील काम पूर्ण केलेले आहे"
         table = [["अ क्र", "कामाचे वर्णन", "टेंडर र.", "टेंडर मान्यता र", "शेरा"], ["1", work, "१०-२०२२", "४०,००,०००/-", "काम पूर्ण"]]
         return _page(n, text, tables=[table])
     doc = _doc(cert(1, "सुयोग इंटरप्रायजेस", "रस्ता काँक्रीटीकरण करणे."), cert(2, "सुयोग एंटरप्रायझेस", "ड्रेनेज लाईन टाकणे."),
@@ -162,8 +162,8 @@ def test_registration_is_judged_on_the_bid_date_and_any_valid_one_counts():
 
 
 def test_bid_capacity_is_recomputed_on_the_tenders_terms():
-    working = ("BID CAPACITY CALCULATION\n(INR in Lacs)\nMaximum value of A (work done) : 210.00\nValue of B (Work in hand) : 20\n"
-               "Bid Capacity : ( A * N * 1.5 ) - B\nValue of N : 6 months (i.e. 1/2 Year)\n: 137.50\nUDIN: 0000")
+    working = ("BID CAPACITY WORKING\n(Rs. in Lakhs)\nValue of A (works executed) : 210.00\nValue of B (commitments) : 20\n"
+               "Bid Capacity : ( A * N * 1.5 ) - B\nValue of N : 6 months\n: 137.50\nUDIN: 0000")
     got = read_bid_capacity(working)
     assert got["A"] == 21_000_000 and got["B"] == 2_000_000 and got["N"] == 0.5
     spec = _spec("pmc_bid_capacity", ">=", 6_000_000.0)
@@ -174,7 +174,7 @@ def test_bid_capacity_is_recomputed_on_the_tenders_terms():
 
 
 def test_a_working_with_two_values_for_a_is_left_to_the_committee():
-    muddled = "A=44.77 Lacs for F.Y. 2024-25= (44.77*1.5=67.16) updated\nN=0.50 years\nB=20 Lacs\n= 47.16 lakhs\nUDIN: 0000"
+    muddled = "A=30.00 Lacs for F.Y. 2025-26= (30.00*1.5=45.00) updated\nN=0.50 years\nB=10 Lacs\n= 12.50 lakhs\nUDIN: 0000"
     assert read_bid_capacity(muddled)["ambiguous_A"]
 
 
@@ -188,12 +188,12 @@ def test_non_gating_conditions_do_not_hold_a_bidder_pending():
 
 @pytest.mark.parametrize("required,row,expected", [
     ("60 mm Shot Blasted Block", "60 mm shot blasted", True),
-    ("60 mm Shot Blasted Block", "Providing and Fixing 80 mm interlocking paving block", False),
+    ("60 mm Shot Blasted Block", "Providing and laying 80 mm paver blocks", False),
     ("60 mm Shot Blasted Block", "६० मि.मी. जाडीचा ब्लॉक", False),
     ("M-15 Concrete", "एम १५ कॉंक्रीट", True),
     ("M-15 Concrete", "M-30 concrete", False),
     ("इंटरलॉकींग ब्लॉक काढून बसविणे", "इंटरलॉकिंग ब्लॉक काढून परत बसविणे.", True),
-    ("इंटरलॉकींग ब्लॉक काढून बसविणे", "Providing and Fixing 100 mm interlocking paving block", False),
+    ("इंटरलॉकींग ब्लॉक काढून बसविणे", "Providing and laying 100 mm paver blocks", False),
 ])
 def test_items_are_matched_by_their_distinguishing_features(required, row, expected):
     assert matches(required, row) is expected
@@ -202,9 +202,9 @@ def test_items_are_matched_by_their_distinguishing_features(required, row, expec
 def test_executed_quantities_not_the_tenders():
     abstract = _page(1, "B O Q CERTIFICATE\nकामाचे नाव : रस्ता दुरुस्ती\nटेंडर क्र. : ५ - २०२४", kind="ocr_en", tables=[[
         ["BOQ Item No.", "Item Name", "Unit", "Tender QTY.", "Upto Date Qty"],
-        ["10", "Re-fixing of Inter locking Paver blocks", "Sqm", "960.00", "588.83"]]])
+        ["10", "Relaying of paver blocks", "Sqm", "750.00", "412.50"]]])
     rows = executed_rows(_doc(abstract, types=["boq_certificate"]))
-    assert [r.qty for r in rows] == [588.83]
+    assert [r.qty for r in rows] == [412.5]
 
 
 def test_quantities_printed_across_a_row():
@@ -232,7 +232,7 @@ def test_key_quantities_count_one_work_or_a_year_never_a_duplicate():
 # --- nature of work, turnover grids --------------------------------------------------------
 
 def test_nature_is_what_was_built_not_where():
-    title = "RSTYANVAR PANIPURVTHA VAHINI / MALNISARA VAHINI TASECH CEBAL KHODAICHE REINSTETMENT KARNE"
+    title = "PRABHAG KR. 5 MADHYE RSTYANCHI DURUSTI V PANIPURVATHA / MALNISSARAN VAHINI KHODAICHE REINSTETMENT KARNE"
     assert judge("road works", title, "शहरातील विविध रस्त्यांवर खोदाईचे रिईनस्टेटमेंट करणे.")[0] == "similar"
     assert judge("road works", title, "गायमुख येथे रस्त्यालगत नाल्यास संरक्षक भिंत बांधणे.")[0] == "not_similar"
     assert judge("road works", title, "प्रभाग क्र. ७ मध्ये ड्रेनेज लाईन टाकणे.")[0] == "uncertain"  # a family the title names

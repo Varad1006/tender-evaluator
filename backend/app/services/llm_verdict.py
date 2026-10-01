@@ -98,7 +98,7 @@ Return JSON only:
 {{"found": true|false,
   "items": [{{"id": <evidence id you used>,
               "quote": "<exact substring of that evidence, copied character for character>",
-              "raw_figure": "<the figure exactly as printed there, e.g. 407 or 3,43,19,907>",
+              "raw_figure": "<the figure exactly as printed there, e.g. 512 or 4,12,35,600>",
               "unit": "rupees|thousand|lakh|crore|none",
               "year": <financial year it starts in, or null>,
               "confidence": 0.0-1.0}}],
@@ -239,8 +239,8 @@ def aggregation(spec: CriterionSpec, requirement: str) -> str:
     """average | each | best — how a year-by-year series is measured against one threshold.
 
     Read off the requirement's own words, so it is the same decision for any tender that words it
-    the same way: "an average annual turnover of minimum INR 4.0 Cr over the last Three years"
-    averages; "positive net worth in each of the last Three financial years" takes the worst year;
+    the same way: "an average annual turnover of at least ₹4 Cr over the last three years"
+    averages; "a positive net worth in each of the last three years" takes the worst year;
     anything else lets the best year answer, which is how an experience or maximum-turnover clause
     works and is the reading that cannot wrongly disqualify.
     """

@@ -1,7 +1,7 @@
 """Executed quantities on a bidder's BOQ / completion certificates, matched to the tender's key items.
 
-The tender asks for "aggregate annual production of the following items in any one financial year"
-(M-15 concrete ≥ 14 cum, interlocking blocks removed and refixed ≥ 600 sqm, ...). Authorities certify
+The tender asks for the quantity of each of a few key items executed in any one financial year
+(say M-15 concrete ≥ 20 cum, paver blocks ≥ 500 sqm). Authorities certify
 what a contractor executed item by item ("प्रत्यक्ष केलेल्या कामाचे परिमाण", "B O Q CERTIFICATE"),
 in Marathi or English, one work per certificate. This module reads those rows and says which of the
 tender's items each row is — by the item's distinguishing features (concrete grade, block thickness,
@@ -215,8 +215,8 @@ _QTY_UNIT_CELL = re.compile(r"^\s*(?P<n>\d[\d,]*(?:\.\d+)?)\s*(?P<u>[^\d\s][^\d]
 
 
 def _horizontal_rows(doc: ParsedDocument, types: list) -> list[ExecutedRow]:
-    """"माती खोदाई | आर सी.सी पाईप पुरवणे | M-30 | GSB" over "१६००.०० घ.मी | NP-3 | १३९.४० घ.मी | ४२८ घ.मी":
-    item names across one row, the quantities executed under them in the next."""
+    """"माती खोदाई | पाईप पुरवणे | M-30 | GSB" over "५००.०० घ.मी | NP-3 | ४०.०० घ.मी | १२० घ.मी":
+    item names across one row, the quantities executed under them in the next (illustrative)."""
     out: list[ExecutedRow] = []
     for p in doc.pages:
         kind = types[p.number - 1] if p.number - 1 < len(types) else None

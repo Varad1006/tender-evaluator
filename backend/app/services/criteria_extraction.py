@@ -80,7 +80,7 @@ class TenderExtraction:
 
 def _required(s: Sentence) -> bool:
     """The sentence states an obligation, itself or through the intro of the list it is an item of
-    ("the tenderer shall … furnish the information detailed out below- / 2 Valid PF code …")."""
+    ("the tenderer shall furnish the following- / 2 valid PF code …")."""
     return bool(REQUIRE.search(s.text) or (s.lead and REQUIRE.search(s.lead)))
 
 
@@ -337,11 +337,10 @@ _QUAL = r"\b(B\.?\s*E\.?|B\.?\s*Tech|M\.?\s*E\.?|M\.?\s*Tech|Graduat\w*|Diploma|
 
 # Stationing people at the site is something the *contractor does during the work*, not something
 # the *bidder must already be* to qualify. The two read almost alike — both name a role, a degree
-# and a number of years — but only one is a gate, and a works volume states both: PMC drainage
-# bundle 2286446 asks for "two nos of experienced Civil Engineers B.E (civil) at each site … 3
-# years' experience of execution" in its execution clauses, while its qualification table asks for
-# "Engineer B.E. Civil / DCE / Technical Staff … min. 5 Years". Reading the execution clause as the
-# criterion sets the bar at 3 years when the tender requires 5, and passes a bidder the committee
+# and a number of years — but only one is a gate, and a works volume can state both: its execution
+# clauses ask for engineers to be stationed at each site with a few years' experience, while its
+# qualification table asks for an engineer with a longer minimum. Reading the execution clause as
+# the criterion sets the bar lower than the tender requires, and passes a bidder the committee
 # would reject.
 _DEPLOYMENT = re.compile(
     r"\b(?:keep|depute|deploy|station|post|engage|appoint)\b[^.]{0,90}\bat\s+(?:each|every|the|all)?\s*sites?\b"

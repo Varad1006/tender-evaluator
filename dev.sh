@@ -6,7 +6,7 @@ set -u
 set -m  # each server gets its own process group, so Ctrl-C reaches only this script, which stops them once
 cd "$(dirname "$0")"
 ROOT=$(pwd)
-BACKEND_PORT=${BACKEND_PORT:-8010}
+BACKEND_PORT=${BACKEND_PORT:-8080}
 FRONTEND_PORT=${FRONTEND_PORT:-5180}
 
 for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do

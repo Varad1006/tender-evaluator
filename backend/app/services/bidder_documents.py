@@ -23,7 +23,14 @@ PAGE_TYPES: list[tuple[str, str, re.Pattern]] = [
     ("bid_capacity", "Bid capacity certificate", re.compile(r"bid(?:ding)?\s*capacity\s*(?:calculation|certificate)?|बीड\s*कॅपॅसिटी", re.I)),
     ("turnover_certificate", "Turnover certificate (CA)", re.compile(
         r"turn\s?over\s*cert|certify\s*that\s*the\s*turn\s?over|turn\s?over\s*of\s*(?:the\s*)?(?:firm|company|mr|m/s)"
-        r"|annual\s*turn\s?over|उलाढाल\s*प्रमाणपत्र", re.I)),
+        r"|annual\s*turn\s?over|उलाढाल\s*प्रमाणपत्र"
+        # A CA's statement that is only a letterhead over a year grid: the grid's own header says it.
+        r"|financial\s*year\s*[|:]?\s*(?:\|\s*)?(?:total\s*|sales\s*|gross\s*)?(?:turn\s?over|contract\s*receipts)", re.I)),
+    # The one document that disqualifies under a no-JV tender: typed in its own right so it never
+    # inherits the type of the certificate in front of it and drops out of the check.
+    ("jv_agreement", "Joint-venture / consortium agreement", re.compile(
+        r"joint\s*venture\s*agreement|consortium\s*agreement|\bJV\s*agreement|agreement\s+of\s+joint\s+venture"
+        r"|संयुक्त\s*(?:उपक्रम|भागीदारी)\s*करार", re.I)),
     ("constitution", "Firm constitution (deed / shop act / udyam)", re.compile(
         r"partnership\s*deed|deed\s*of\s*partnership|memorandum\s*of\s*association|certificate\s*of\s*incorporation"
         r"|udyam|shop\s*(?:&|and)?\s*establishment|दुकाने\s*व\s*आस्थापना|भागीदारी\s*(?:पत्र|करार)", re.I)),

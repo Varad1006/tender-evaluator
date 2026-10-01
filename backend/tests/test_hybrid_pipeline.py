@@ -18,9 +18,9 @@ from app.services.values import words_to_amount
 # --- values -----------------------------------------------------------------------------
 
 def test_indian_amount_in_words():
-    assert words_to_amount("Four Lakhs Twenty Three Thousand Six Hundred Forty Seven Rupees") == 423647
-    assert words_to_amount("One Crore Eighty Lakhs Forty Nine Thousand Eight Hundred Eighty Six Rupees and "
-                           "Twenty Five Paise") == pytest.approx(18049886.25)
+    assert words_to_amount("Five Lakhs Twelve Thousand Eight Hundred Thirty Rupees") == 512830
+    assert words_to_amount("Two Crore Ten Lakhs Five Thousand Three Hundred Seven Rupees and "
+                           "Fifty Paise") == pytest.approx(21005307.50)
     assert words_to_amount("Rupees Five Crore only") == 50_000_000
     assert words_to_amount("no numbers here") is None
 
@@ -31,10 +31,11 @@ def test_page_readability_classes():
     english = "The bidder shall submit the tender with the earnest money deposit and all documents. " * 3
     assert classify_page(english).kind == "english"
     assert classify_page("").kind == "image"
-    # bad OCR layer on a scan (TERMS.pdf) and a legacy ASCII-mapped Marathi font (155.pdf)
-    assert classify_page("qrfi .{rtrdi {' ;i1 66a6ifl alT-qT 6{1-fi ftfu( trrrqr e iqrrqrt rlara+ xft'a " * 3).kind == "garbled"
-    assert classify_page("Q|Sa H« _m¨H . gZ² RoH oXmamMo Zmd d nËVm H$m_mMo Zmd Q|Sa ~m~tMr nyd©J[UV aŠH _ " * 3).kind == "garbled"
-    assert classify_page("मागील ५ वर्षातील कंत्राटदाराची कमाल उलाढाल देय असलेल्या कामाच्या " * 3).kind == "marathi"
+    # a bad OCR layer on a scan, and Marathi set in a legacy ASCII-mapped font (invented strings of
+    # the same character mix)
+    assert classify_page("vbtq .{yjkqe {' ;u1 88c8ogz dlW-pW 8{2-gu gtgo( ywwwpw f opwwpwy wdbwd+ zgy'd " * 3).kind == "garbled"
+    assert classify_page("P|Ta J« _n¨J . hX² SpJ pYnbnNp Ynd e oËWn J$n_nNp Ynd P|Ta ~n~uNs ozd©K[VW bŠJ _ " * 3).kind == "garbled"
+    assert classify_page("निविदाधारकाने मागील तीन वर्षांतील कामांची यादी व प्रमाणपत्रे सादर करावीत " * 3).kind == "marathi"
 
 
 # --- bundles ----------------------------------------------------------------------------
@@ -66,7 +67,7 @@ def test_bundle_expands_nested_archives_and_skips_junk(tmp_path):
 
 def test_document_roles():
     assert classify_document("155.pdf", "Tender Abstract Work Name") == "notice"  # ward notices open with the abstract
-    assert classify_document("TERMSCONDHION.pdf", "Tender No. : PMC/DRAINAGE/2026/89 FINAL Tender Conditions") == "conditions"
+    assert classify_document("TERMSCONDHION.pdf", "Tender No. : PMC/DRAINAGE/2026/12 FINAL Tender Conditions") == "conditions"
     assert classify_document("x.pdf", "REQUEST FOR PROPOSAL for Selection of Agency") == "rfp"
     assert classify_document("ALL_SOP.pdf", "Chapter: 1 -SOP for wiring work") == "specifications"
     assert classify_document("BOQ_1.xls", "") == "boq"
@@ -110,55 +111,55 @@ def test_datalab_adapter_submits_polls_and_caches(tmp_path):
 
 def test_chandra_markdown_keeps_handwriting_and_drops_struck_text():
     md = ("# Parameters for Qualification Criteria\n\n| Sr. No. | Criteria | Parameters |\n|---|---|---|\n"
-          "| 1 | Maximum Turnover of contractor in last five years | Rs. <u>52.5</u> Lacs |\n"
-          "| 2 | similar works (<del>sewer /storm water line</del>) <i>New installation of manhole gate</i> | "
-          "a) Rs. <u>14</u> lacs<br>b) Rs. <u>17.5</u> lacs |\n\n"
-          "Bid Capacity = $\\frac{\\text{A} \\times N}{1}$ **Rs. 35.0 lacs**")
+          "| 1 | Maximum Turnover of contractor in last five years | Rs. <u>48.0</u> Lacs |\n"
+          "| 2 | similar works (<del>water supply line</del>) <i>Repair of drainage chambers</i> | "
+          "a) Rs. <u>12</u> lacs<br>b) Rs. <u>15</u> lacs |\n\n"
+          "Bid Capacity = $\\frac{\\text{A} \\times N}{1}$ **Rs. 30.0 lacs**")
     page = ocr_page(3, md, "balanced")
     assert page.quality.kind == "ocr_en"
-    assert page.struck == ["sewer /storm water line"] and page.handwritten == ["New installation of manhole gate"]
+    assert page.struck == ["water supply line"] and page.handwritten == ["Repair of drainage chambers"]
     row = page.tables[0][2]
-    assert "sewer" not in " ".join(row) and "New installation of manhole gate" in row[1]
-    assert "Rs. 52.5 Lacs" in page.tables[0][1][2]
+    assert "water supply" not in " ".join(row) and "Repair of drainage chambers" in row[1]
+    assert "Rs. 48.0 Lacs" in page.tables[0][1][2]
     assert "(A × N) / (1)" in page.text and "**" not in page.text
     sentences, _ = page_sentences(page)
-    assert any(s.in_table and "52.5" in s.text for s in sentences)
+    assert any(s.in_table and "48.0" in s.text for s in sentences)
 
 
 # --- facts ----------------------------------------------------------------------------------
 
 def test_security_deposit_4_plus_1_is_not_a_conflict():
     fc = FactCollector()
-    fc.add("emd", 4236, "d", "205.pdf", 1, "EMD", "Tender Notice")
-    fc.add("security_deposit", 16946, "d", "205.pdf", 1, "SD 4%", "Tender Notice")
-    fc.add("security_deposit", 21182, "d", "205.pdf", 5, "SD 5%", "B-1 form")
+    fc.add("emd", 5000, "d", "123.pdf", 1, "EMD", "Tender Notice")
+    fc.add("security_deposit", 20000, "d", "123.pdf", 1, "SD 4%", "Tender Notice")
+    fc.add("security_deposit", 25000, "d", "123.pdf", 5, "SD 5%", "B-1 form")
     facts = fc.reconcile()
-    assert facts["security_deposit"].status == "consistent" and facts["security_deposit"].value == 21182
+    assert facts["security_deposit"].status == "consistent" and facts["security_deposit"].value == 25000
     assert "EMD converted" in facts["security_deposit"].note
 
 
 def test_typed_sources_outrank_ocr_and_truncated_names_agree():
     fc = FactCollector()
-    fc.add("total_estimated_cost", 3499941, "a", "TERMS.pdf", 5, "row", "Conditions tender table")
-    fc.add("total_estimated_cost", 3499941, "a", "TERMS.pdf", 7, "row", "form table")
+    fc.add("total_estimated_cost", 4567800, "a", "TERMS.pdf", 5, "row", "Conditions tender table")
+    fc.add("total_estimated_cost", 4567800, "a", "TERMS.pdf", 7, "row", "form table")
     fc.ocr = True
-    fc.add("total_estimated_cost", 3439942, "b", "DATASHEET.pdf", 1, "handwritten", "form table")
+    fc.add("total_estimated_cost", 4561800, "b", "DATASHEET.pdf", 1, "handwritten", "form table")
     fc.ocr = False
-    fc.add("work_name", "SHANIWAR PETH DRAINAGE LINE", "c", "245.pdf", 4, "line", "Work Input Form")
-    fc.add("work_name", "SHANIWAR PETH DRAINAGE LINE SAFSAFAI KARNE.", "c", "245.pdf", 4, "table", "form table")
+    fc.add("work_name", "WARD 9 DRAINAGE LINE", "c", "123.pdf", 4, "line", "Work Input Form")
+    fc.add("work_name", "WARD 9 DRAINAGE LINE SAFAI KARNE.", "c", "123.pdf", 4, "table", "form table")
     facts = fc.reconcile()
-    assert facts["total_estimated_cost"].value == 3499941 and "OCR read ₹34,39,942" in facts["total_estimated_cost"].note
+    assert facts["total_estimated_cost"].value == 4567800 and "OCR read ₹45,61,800" in facts["total_estimated_cost"].note
     assert facts["work_name"].status == "consistent" and facts["work_name"].value.endswith("KARNE.")
 
 
 def test_portal_form_tables_map_labels_to_values():
     fc = FactCollector()
     fc.scan_tables([[["Type of Contract:", "Completion Month:", "Rainy Season:", "Months:"], ["B1", "12", "Excluded", "12"]],
-                    [["3", "Form of Contract:", "PERCENTAGE"], ["", "EMD Fee:", "150000"], ["", "Security Deposit (5%)", "5%"]]],
+                    [["3", "Form of Contract:", "PERCENTAGE"], ["", "EMD Fee:", "120000"], ["", "Security Deposit (5%)", "5%"]]],
                    "d", "notice.pdf", 3)
     facts = fc.reconcile()
     assert facts["completion_months"].value == 12 and facts["rainy_season"].value == "Excluded"
-    assert facts["form_of_contract"].value == "Percentage" and facts["emd"].value == 150000
+    assert facts["form_of_contract"].value == "Percentage" and facts["emd"].value == 120000
     assert facts["security_deposit"].status == "missing"  # "5%" is a rate, never an amount
 
 

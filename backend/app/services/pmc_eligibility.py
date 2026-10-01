@@ -16,8 +16,8 @@ What the corpus taught us, and how it is handled:
   * The clauses are often only in scanned / legacy-font / Marathi pages. After OCR they are
     located and quoted verbatim (Marathi quotes stay Marathi); before OCR, a lossy Marathi text
     layer still lets us cite the page by Devanagari-digit signatures (४०%, ५०%, ८०%).
-  * Printed numbers are unreliable: "Rs.423647 Lakhs (Rs. Four Lakhs ...)" is a template unit
-    error; road volumes leave "Rs. .......... Lakhs" blank; one drainage tender computes on the
+  * Printed numbers are unreliable: "Rs.512830 Lakhs (Rs. Five Lakhs ...)" — a rupee figure
+    labelled lakhs — is a template unit error; road volumes leave "Rs. .......... Lakhs" blank; one drainage tender computes on the
     GST-inclusive cost. The tender's own stated figure governs when it is legible and sane; the
     formula is a cross-check whose disagreement is surfaced, never silently overridden.
   * Similar-work "nature" is set per tender, sometimes by striking out the printed text and
@@ -296,7 +296,7 @@ class StatedAmount:
 
 
 def _stated_turnover(sentence: str) -> StatedAmount:
-    """'... i.e.,Rs.423647 Lakhs (Rs.Four Lakhs ... Rupees .)' -> digits, unit, words, blank."""
+    """'... i.e.,Rs.512830 Lakhs (Rs.Five Lakhs ... Rupees .)' -> digits, unit, words, blank."""
     blank = bool(re.search(r"Rs\.?\s*[.…]{4,}", sentence))
     m = re.search(r"i\.?\s*e\.?\s*,?\s*Rs\.?\s*([\d,]+(?:\.\d+)?)\s*(Lakhs?|Lacs?|Crores?|Cr\.?)?", sentence, re.I)
     digits = float(m.group(1).replace(",", "")) if m and m.group(1) else None
