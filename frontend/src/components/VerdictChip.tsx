@@ -8,6 +8,7 @@ import { verdictLook, type Verdict } from '../theme';
 
 const ICONS = {
   pass: CheckCircleRoundedIcon,
+  not_matched: CancelRoundedIcon,
   fail: CancelRoundedIcon,
   unknown: HelpRoundedIcon,
 };

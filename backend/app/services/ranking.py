@@ -21,6 +21,10 @@ class BidderStanding:
     issues: list[dict] = field(default_factory=list)  # failing / unknown criteria with citations
 
 
+# A measured shortfall and an outright breach both disqualify; both name the gate they failed.
+NEGATIVE = ("fail", "not_matched")
+
+
 def compute_ranking(mechanism: str, mechanism_label: str | None, standings: list[BidderStanding]) -> dict:
     warning = None
     if mechanism == "QCBS":
@@ -51,7 +55,7 @@ def compute_ranking(mechanism: str, mechanism_label: str | None, standings: list
                                   f"Held pending clarification — {n} {'criterion' if n == 1 else 'criteria'} could not be determined"))
     for s in standings:
         if s.status == "disqualified":
-            gates = ", ".join(i["criterion_label"] for i in s.issues if i["verdict"] == "fail")
+            gates = ", ".join(i["criterion_label"] for i in s.issues if i["verdict"] in NEGATIVE)
             entries.append(_entry(s, "✕", "disqualified", f"Disqualified — failed gating criterion: {gates}"))
 
     return {

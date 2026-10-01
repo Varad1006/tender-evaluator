@@ -9,7 +9,7 @@ import { notGateStyle, tokens, verdictStyle, type Verdict } from '../theme';
 export function Legend() {
   return (
     <Stack direction="row" spacing={1.75} sx={{ fontSize: 12.5, color: tokens.muted }}>
-      {[...(['pass', 'fail', 'unknown'] as Verdict[]).map((v) => verdictStyle[v]), notGateStyle].map((s) => (
+      {[...(['pass', 'not_matched', 'unknown'] as Verdict[]).map((v) => verdictStyle[v]), notGateStyle].map((s) => (
         <Stack key={s.label} direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
           <Box sx={{ width: 9, height: 9, borderRadius: '2px', bgcolor: s.solid }} />
           <span>{s.label}</span>

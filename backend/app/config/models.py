@@ -16,6 +16,11 @@ _DEFAULTS: dict[str, str] = {
     "extraction_critical": "gemini-2.5-pro",
     "judge": "gemini-2.5-flash",
     "escalation": "gemini-2.5-pro",
+    # OpenRouter roles. `reader` does the grounded reading for every bidder; `critical` is the
+    # second opinion a negative has to survive before it is shown to a committee, and the model a
+    # low-confidence reading is escalated to. Overridable per environment, as above.
+    "reader": os.environ.get("TE_MODEL_READER", "google/gemini-2.5-flash"),
+    "critical": os.environ.get("TE_MODEL_CRITICAL", "anthropic/claude-sonnet-4.5"),
 }
 
 

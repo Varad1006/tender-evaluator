@@ -17,6 +17,7 @@ from app.adapters.llm import LLMError
 from app.adapters.pdf_parser import ParsedDocument, Sentence, quote_on_page
 from app.services.year_tables import (
     DERIVED_LABEL,
+    grid_from_lines,
     TURNOVER_LABEL,
     WORK_DONE_LABEL,
     cell_amount,
@@ -59,6 +60,9 @@ class CriterionSpec:
     threshold_value: float | None = None
     threshold_unit: str | None = None
     extraction_method: str = "deterministic"
+    # The clause as the tender printed it. A finder is chosen from this rather than from `key`,
+    # because the key is a name this system invented and the clause is what the tender said.
+    requirement: str = ""
     # Tender facts the check needs beyond its own threshold: estimated cost, completion period,
     # reference number (an EMD receipt must be for this tender; a bid capacity for its period).
     tender: dict = field(default_factory=dict)
@@ -116,12 +120,13 @@ def find_turnover_series(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim
     types = getattr(doc, "page_types", None) or []
     for page in sorted(pages):
         p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
-        if p is None or not p.tables:
+        tables = _tables_of(p) if p is not None else []
+        if not tables:
             continue
         # On the CA's turnover certificate itself every year-and-amount row is the turnover, whatever
         # the column is called ("Total contract amount received") or if it is not called anything.
         own = page - 1 < len(types) and types[page - 1] == "turnover_certificate"
-        for yv in read_year_series(p.tables, want=None if own else TURNOVER_LABEL, avoid=DERIVED_LABEL):
+        for yv in read_year_series(tables, want=None if own else TURNOVER_LABEL, avoid=DERIVED_LABEL):
             if (yv.year, yv.value) in seen:
                 continue
             seen.add((yv.year, yv.value))
@@ -473,11 +478,33 @@ def llm_find_evidence(llm, doc: ParsedDocument, spec: CriterionSpec) -> list[Cla
     return out
 
 
+# A finder indexed by concept rather than by criterion key. The keys this system gives criteria are
+# generated from the clause it read them in, so the same requirement arrives as `avg_turnover` in
+# one tender, `positive_net_worth` in another and `min_staff_strength` in a third — and a registry
+# keyed by name finds a finder for none of them on a tender nobody has seen yet. The concept is
+# stable: whatever the clause is called, it is still asking about turnover.
+CONCEPT_FINDERS: dict[str, Callable[[ParsedDocument, CriterionSpec], list[Claim]]] = {}
+
+
+def _finder_for(spec: CriterionSpec):
+    """The finder for a criterion: by key where one is registered, else by what the clause is about."""
+    by_key = FINDERS.get(spec.key)
+    if by_key is not None:
+        return by_key
+    from app.services.concepts import resolve
+
+    concept = resolve(spec.requirement or spec.label, label=spec.label,
+                      datatype="count" if spec.threshold_unit not in (None, "INR") else "currency")
+    if concept is not None and concept.key in CONCEPT_FINDERS:
+        return CONCEPT_FINDERS[concept.key]
+    return find_generic_document if spec.key.startswith("doc_") else None
+
+
 def extract_bidder(doc: ParsedDocument, specs: list[CriterionSpec], filename: str, llm=None) -> BidderExtraction:
     claims: list[Claim] = []
     warnings: list[str] = []
     for spec in specs:
-        finder = FINDERS.get(spec.key) or (find_generic_document if spec.key.startswith("doc_") else None)
+        finder = _finder_for(spec)
         try:
             if finder:
                 claims.extend(finder(doc, spec))
@@ -502,3 +529,278 @@ def extract_bidder(doc: ParsedDocument, specs: list[CriterionSpec], filename: st
 # PMC works criteria read from a bid's documents (EMD receipt, registration, bid-capacity working,
 # firm constitution, executed quantities) register themselves into FINDERS when this module loads.
 import app.services.bidder_evidence  # noqa: E402,F401
+
+
+# --------------------------------------------------------------------------------------
+# Concept-led finders: the fact is in the bid, under the bidder's own name for it
+# --------------------------------------------------------------------------------------
+
+def _tables_of(page) -> list[list[list[str]]]:
+    """Every grid on a page: the ones pdfplumber ruled, and the ones it could not see.
+
+    A chartered accountant's certificate aligns columns with spaces, so `page.tables` is empty on
+    exactly the pages that carry the turnover, net worth and profit series. Those are rebuilt from
+    the text lines, which is also the only shape an OCR'd page ever has.
+    """
+    return list(page.tables or []) + grid_from_lines(page.lines or [])
+
+
+def _concept_pages(doc: ParsedDocument, concept) -> set[int]:
+    """Pages where this concept is named — by a cue in a sentence, or by the heading of the
+    document that carries it. Headings matter because a bid is one merged scan: the grid on a page
+    is anonymous, and the only thing identifying it is the certificate title above it."""
+    pages: set[int] = set()
+    for s in doc.sentences:
+        if concept.hit(s.text):
+            pages.add(s.page)
+    from app.services.concepts import CHECKLIST
+
+    for p in doc.pages:
+        lines = p.lines or [l for l in (p.text or "").splitlines() if l.strip()]
+        # The bid's own contents page names every document it encloses — "16 Manpower Declaration
+        # Y Page No.75-77" — so matching a heading anywhere on the page makes the index a candidate
+        # for every concept at once. The heading has to be on a line that is not a checklist row.
+        if concept.documents is not None and any(
+                concept.documents.search(line) and not CHECKLIST.search(line) for line in lines):
+            pages.add(p.number)
+        elif any(concept.hit(line) == "anchor" for line in lines):
+            pages.add(p.number)
+    return pages
+
+
+def _series_claims(doc: ParsedDocument, spec: CriterionSpec, concept, label_rx) -> list[Claim]:
+    """Year-stamped figures for one concept, read out of the grids on the pages that name it."""
+    out: list[Claim] = []
+    seen: set[tuple[int, float]] = set()
+    for page in sorted(_concept_pages(doc, concept)):
+        p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
+        tables = _tables_of(p) if p is not None else []
+        if not tables:
+            continue
+        for yv in read_year_series(tables, want=label_rx, avoid=DERIVED_LABEL):
+            if (yv.year, yv.value) in seen:
+                continue
+            seen.add((yv.year, yv.value))
+            s = Sentence(page=page, section=yv.label or concept.label, in_table=True,
+                         text=f"{yv.label or concept.label} — FY {yv.year}-{str(yv.year + 1)[-2:]}: {yv.cell}")
+            out.append(_claim(spec.key, s, f"FY {yv.year}-{str(yv.year + 1)[-2:]}: {format_inr(yv.value)}",
+                              yv.value, year=yv.year, source="table", concept=concept.key))
+    return out
+
+
+def find_net_worth(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """The bidder's net worth, year by year where the certificate states it that way.
+
+    Two shapes carry it. A CA's statement labels the row — "2 | Net-Worth | 255 | 293 | 332" — and
+    that is read here. A balance sheet states only the components, and the figure has to be derived
+    ("Net-worth is determined by subtracting total liabilities from total assets", DBT bid p.13);
+    those pages are recorded as derivation candidates rather than guessed at, so the reading stage
+    can resolve them against the actual captions instead of this module inventing a subtraction.
+    """
+    from app.services.concepts import NET_WORTH
+    from app.services.year_tables import NETWORTH_LABEL
+
+    out = _series_claims(doc, spec, NET_WORTH, NETWORTH_LABEL)
+
+    # Prose: "the net worth of M/s X as on 31.03.2025 is Rs. 3,32,00,000/-".
+    for s in doc.sentences:
+        if NET_WORTH.hit(s.text) != "anchor":
+            continue
+        amounts = parse_amounts(s.text)
+        if not amounts:
+            continue
+        years = parse_financial_years(s.text) or parse_years(s.text)
+        value = amounts[0].value
+        if any(c.value_numeric == value for c in out):
+            continue
+        out.append(_claim(spec.key, s, format_inr(value), value,
+                          year=years[0] if years else None, concept=NET_WORTH.key))
+
+    # Pages that hold the components but not the total.
+    for page in sorted(_concept_pages(doc, NET_WORTH)):
+        p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
+        if p is None or any(c.page == page for c in out):
+            continue
+        text = (p.text or "").lower()
+        for parts in NET_WORTH.derived_from:
+            if all(part in text for part in parts):
+                s = Sentence(page=page, section="Balance sheet",
+                             text=f"Balance sheet stating {' and '.join(parts)}; net worth not stated directly.")
+                out.append(_claim(spec.key, s, "derivable from balance sheet", None,
+                                  concept=NET_WORTH.key, derive_from=list(parts), needs_reading=True))
+                break
+    return out
+
+
+def find_turnover_concept(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """Turnover under any of the names a bid gives it, with the invoice boilerplate refused.
+
+    `find_turnover_series` reads the certificates; this adds the shapes that carry no year grid —
+    an audited P&L's "Revenue from Operations", a 26AS "Gross receipt", a prose certificate — and
+    drops the GST declaration every tax invoice in a bid repeats, which puts the word "turnover"
+    beside invoice amounts while stating nobody's turnover.
+    """
+    from app.services.concepts import TURNOVER
+    from app.services.year_tables import TURNOVER_LABEL
+
+    out = _series_claims(doc, spec, TURNOVER, TURNOVER_LABEL)
+    known = {(c.detail.get("year"), c.value_numeric) for c in out}
+    for s in doc.sentences:
+        cue = TURNOVER.hit(s.text)
+        if cue is None:
+            continue
+        amounts = parse_amounts(s.text)
+        if not amounts:
+            continue
+        years = parse_financial_years(s.text)
+        year = years[0] if len(years) == 1 else None
+        value = amounts[0].value
+        if (year, value) in known:
+            continue
+        known.add((year, value))
+        out.append(_claim(spec.key, s, format_inr(value), value, year=year,
+                          concept=TURNOVER.key, cue=cue))
+    return out
+
+
+# A roster is numbered, and its highest serial is the count the bidder is asserting. Counting rows
+# instead breaks on the two things that always happen to a 60-name roster in a merged scan: it is
+# split across pages (DBT bid pp.75-77), and pdfplumber drops or merges rows inside it. The serials
+# survive both. They are only trusted as a count when they run from 1 without a large gap, so a
+# stray "48" in a column of experience years cannot become a staff strength of 48.
+_SERIAL = re.compile(r"^\s*(\d{1,3})\s*[.)]?\s*$")
+_NAME_CELL = re.compile(r"^[A-Z][A-Za-z.\-]+(?:\s+[A-Za-z.\-]+){0,3}$")
+_QUALIFICATION = re.compile(
+    r"\b(?:B\.?E\.?|B\.?Tech|M\.?Tech|MCA|BCA|BCS|MCS|B\.?Sc|M\.?Sc|BSC|MSC|B\.?Com|M\.?Com|MBA|"
+    r"diploma|bachelor|master|graduat|engineer|civil|computer\s+science)\b", re.IGNORECASE)
+
+# "a minimum of 30 IT Professionals" is the requirement, not the bidder's strength. Bids reproduce
+# the RFP clause verbatim, and reading its number as the claim would hand every bidder exactly the
+# threshold — a pass on the tender's own words.
+_REQUIREMENT_ECHO = re.compile(
+    r"\b(?:minimum|at\s+least|not\s+less\s+than|must\s+have|should\s+have|shall\s+have|"
+    r"required\s+to\s+have|as\s+per\s+(?:the\s+)?(?:RFP|tender|clause))\b", re.IGNORECASE)
+_DECLARED = re.compile(
+    r"(?:has|have|having|employs?|employing|strength\s+of|total\s+of|comprising\s+of|consists?\s+of)?"
+    r"\s*(?P<n>\d{1,4})\s*\+?\s*(?:nos?\.?\s*)?"
+    r"(?:[A-Za-z()/,&.\-]+\s+){0,4}?"
+    r"(?:IT\s+)?(?:technically\s+qualified\s+)?"
+    r"(?P<noun>professionals?|personnel|employees?|staff|engineers?|technicians?|experts?)\b",
+    re.IGNORECASE)
+
+
+def find_staff_strength(doc: ParsedDocument, spec: CriterionSpec) -> list[Claim]:
+    """How many people the bidder has, by every route the submission offers.
+
+    The requirement counts "IT Professionals on an on-roll staff strength"; the bid answers with
+    "technically qualified professionals on companies' payroll", a declared "50+", and a numbered
+    roster that reaches 66 (DBT bid pp.75-77). All three are returned as separate claims — the
+    declared figure because it is what the bidder asserts, the roster because it is the only one
+    that can be counted, and the tabulated staff statement because works bids use that instead.
+    """
+    from app.services.concepts import STAFF_STRENGTH
+
+    pages = _concept_pages(doc, STAFF_STRENGTH)
+    if not pages:
+        return []
+    out: list[Claim] = []
+
+    for s in doc.sentences:
+        if s.page not in pages or STAFF_STRENGTH.hit(s.text) is None:
+            continue
+        if _REQUIREMENT_ECHO.search(s.text):
+            continue
+        m = _DECLARED.search(s.text)
+        if not m:
+            continue
+        count = int(m.group("n"))
+        if not 1 <= count <= 5000:
+            continue
+        out.append(_claim(spec.key, s, f"{count} {m.group('noun').lower()}", float(count),
+                          concept=STAFF_STRENGTH.key, source="declared",
+                          approximate="+" in m.group(0)))
+
+    # The roster itself, counted by its serials across however many pages it runs.
+    # Serials are collected per page and only then assembled into a roster. A single dict keyed by
+    # serial would be first-come-first-served, and the bid's own index page — scanned first, and
+    # numbering its contents 1, 2, 3 … — takes the roster's low numbers for itself. The roster then
+    # appears to start at 5 and is discarded. Which page a serial sits on is the whole question
+    # here, so nothing may be deduplicated before the pages are grouped.
+    per_page: dict[int, set[int]] = {}
+    for page in sorted(pages | {p + 1 for p in pages} | {p + 2 for p in pages}):
+        p = doc.pages[page - 1] if 0 < page <= len(doc.pages) else None
+        if p is None:
+            continue
+        here: set[int] = set()
+        for rows in p.tables:
+            for row in rows:
+                cells = [(c or "").strip() for c in row]
+                serial = next((int(m.group(1)) for c in cells[:2] if (m := _SERIAL.match(c))), None)
+                if serial is None:
+                    continue
+                looks_like_a_person = any(_NAME_CELL.match(c) for c in cells[1:3]) or \
+                    any(_QUALIFICATION.search(c) for c in cells[1:])
+                if looks_like_a_person:
+                    here.add(serial)
+        # The roster is usually not ruled either — "1 Aashwini Bankar MCA 20" is a line of text.
+        # A degree on the line is what separates a person from a bill-of-quantities item, which has
+        # the same shape ("1 Excavation in ordinary soil 2500") and must not be counted as staff.
+        for line in (p.lines or []):
+            tokens = line.split()
+            if len(tokens) < 3 or not _SERIAL.match(tokens[0]):
+                continue
+            if not _QUALIFICATION.search(" ".join(tokens[1:])):
+                continue
+            here.add(int(_SERIAL.match(tokens[0]).group(1)))
+        if here:
+            per_page[page] = here
+
+    serials: dict[int, int] = {}  # serial -> page it was seen on
+    if per_page:
+        # A roster runs over consecutive pages, numbering upward. Starting from the page holding
+        # the highest serial, each preceding page joins while it continues that numbering from
+        # below — which admits the roster's own pages and excludes an index that happens to count
+        # its rows somewhere else in the submission.
+        last_page = max(per_page, key=lambda pg: max(per_page[pg]))
+        block = [last_page]
+        while last_page - 1 in per_page and min(per_page[last_page - 1]) < min(per_page[last_page]):
+            last_page -= 1
+            block.append(last_page)
+        for page in sorted(block):
+            for n in sorted(per_page[page]):
+                serials.setdefault(n, page)
+    if serials:
+        top = max(serials)
+        rows_read = sum(1 for n in range(1, top + 1) if n in serials)
+        # The top serial has to be the end of a list, not a number that happens to be large. A lone
+        # "66" on a page is a quantity, an age or a page number; a 66 with 63, 64 and 65 around it
+        # is the bottom of a roster. Neighbours rather than an unbroken run, because a single row
+        # dropped by the table reader sits at the end as often as anywhere else and would otherwise
+        # discard the whole roster — which is what happened here: serial 66 was not read, and a
+        # 67-name roster counted as nothing.
+        #
+        # Coverage is allowed to be partial for the same reason, so both figures are carried: the
+        # top serial as what the bidder's own numbering asserts, and `rows_read` as what was
+        # actually counted, which is the floor a verdict can pass on without trusting the top.
+        neighbours = sum(1 for n in range(max(1, top - 4), top) if n in serials)
+        if 1 in serials and top >= 3 and neighbours >= 2 and rows_read / top >= 0.5:
+            first, last = serials[1], serials[top]
+            s = Sentence(page=first, section="Roster",
+                         text=f"Numbered roster of personnel, serials 1–{top} ({rows_read} rows read) "
+                              f"on pages {first}–{last}.")
+            out.append(_claim(spec.key, s, f"{top} named personnel", float(top),
+                              concept=STAFF_STRENGTH.key, source="roster",
+                              rows_read=rows_read, floor=rows_read,
+                              first_page=first, last_page=last))
+    return out
+
+
+CONCEPT_FINDERS["turnover"] = find_turnover_concept
+CONCEPT_FINDERS["net_worth"] = find_net_worth
+CONCEPT_FINDERS["staff_strength"] = find_staff_strength
+
+# The original turnover finder matched any sentence containing the word, which includes a bid's own
+# contents checklist: "Copy of the audited total turnover, net-worth and Profit & Loss for financial
+# years 2022-23 ... Page No.80-89" was read as a turnover of ₹2,022 and disqualified a bidder whose
+# certificate states ₹4.25 crore. The concept-aware reader refuses checklists.
+FINDERS["avg_turnover"] = find_turnover_concept

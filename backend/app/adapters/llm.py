@@ -83,7 +83,17 @@ class GeminiAdapter:
             raise LLMError(f"Malformed output from {model} after retry") from exc
 
 
-def get_llm() -> GeminiAdapter | None:
-    if not settings.GEMINI_API_KEY:
-        return None
-    return GeminiAdapter(settings.GEMINI_API_KEY)
+def get_llm():
+    """The reading-stage adapter, or None when no key is configured (everything degrades).
+
+    OpenRouter first: it is the one with a cost meter, a spend ceiling and a disk cache, all of
+    which a run against fifteen bidders needs. Gemini stays as the fallback so an existing
+    deployment keeps working on the key it already has.
+    """
+    if settings.OPENROUTER_API_KEY:
+        from app.adapters.openrouter import OpenRouterAdapter
+
+        return OpenRouterAdapter(settings.OPENROUTER_API_KEY)
+    if settings.GEMINI_API_KEY:
+        return GeminiAdapter(settings.GEMINI_API_KEY)
+    return None

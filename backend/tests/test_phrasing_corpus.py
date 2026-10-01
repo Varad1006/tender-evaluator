@@ -584,3 +584,313 @@ def test_collided_columns_state_no_amount_anybody_can_defend():
     from app.services.work_proof import _amounts
     assert all(v <= 100_000_000_000 for v in _amounts(COLLIDED))
     assert 180 not in _amounts(COLLIDED), "a truncated fragment was returned as an amount"
+
+
+# ==============================================================================================
+# 10. The same fact, worded by the tender and then by the bidder
+#
+# Every row below is a verbatim shape from the twelve-bid corpus or the five tender bundles. The
+# point of the section is that the two sides share no vocabulary: the tender asks for "an on-roll
+# staff strength of a minimum of 30 IT Professionals" and the bid answers "50+ technically
+# qualified professionals on companies' payroll". Searching for the requirement's words finds
+# nothing, and the criterion comes back unknown on a submission that answers it twice over.
+# ==============================================================================================
+
+REQUIREMENT_CONCEPTS = [
+    # (requirement as the tender prints it, clause heading, datatype, concept it is about)
+    ("The Bidder should have an average annual turnover of minimum of INR 4.0 Cr over the last Three "
+     "years (FY 2022-23, 2023-24 and 2024-25).", "Financials", "currency", "turnover"),
+    ("The Bidder should respectively have positive net worth in each of the last Three financial "
+     "years (FY 2022-23, 2023-24 and 2024-25).", "Financials", "currency", "net_worth"),
+    ("The Bidder must have an on-roll staff strength of a minimum of 30 IT Professionals having "
+     "Core Expertise in Software Development.", "Manpower Declaration", "count", "staff_strength"),
+    ("Technical Manpower Strength", "", "count", "staff_strength"),
+    ("Solvency certificate from a scheduled bank", "", "currency", "solvency"),
+    ("The Bidder should not have been blacklisted / debarred by any Govt. entity or any PSU in "
+     "India as on the date of bid submission.", "", "boolean", "non_blacklisting"),
+    ("The Bidder should be an entity registered in India under the Companies Act 1956 / 2013 or LLP "
+     "registered under LLP Act 2008", "Legal Entity", "boolean", "legal_entity"),
+]
+
+
+@pytest.mark.parametrize("requirement,label,datatype,want", REQUIREMENT_CONCEPTS)
+def test_a_requirement_resolves_to_what_it_is_about(requirement, label, datatype, want):
+    from app.services.concepts import resolve
+
+    got = resolve(requirement, label=label, datatype=datatype)
+    assert got is not None and got.key == want
+
+
+# How a bid states each fact, and what the cue is worth. "anchor" names the fact on its own;
+# "support" is consistent with it but names other things too; None is a page that says the word and
+# states no value of it, which must never be read as evidence.
+BIDDER_PHRASINGS = [
+    # --- turnover, eleven shapes across twelve bids ---
+    ("turnover", "Financial Year Turnover (Rs) 2020-2021 3,43,19,907/-", "anchor"),
+    ("turnover", "Financial Year Sales Turnover (in Work done crore) 2020-200", "anchor"),
+    ("turnover", "Sr No Financial Year Annual Turnover 1 Year 1 (2024-25)", "anchor"),
+    ("turnover", "1 Turnover 407 417 453", "anchor"),
+    ("turnover", "ANNUAT TURNOVER CERTIFICATE This is to certify that to the best of our knowledge", "anchor"),
+    ("turnover", "their annual turnovers for last three consecutive years are as under", "anchor"),
+    ("turnover", "the value of Business Turnover of, MR.SANDIP SAVATA ZAGADEPROP OF M/s. SANDIP ENTERPRISES", "anchor"),
+    ("turnover", "Date of filing Return Period Taxable Turnover Total Turnover 1 27ADFFS8462G1ZP", "anchor"),
+    ("turnover", "TDS TDS claimed Gross receipt", "anchor"),
+    ("turnover", "I Revenue From Operations 15", "support"),
+    ("turnover", "Note 31 March 2025 31 March 2024 Revenue from Operations 18", "support"),
+    # The GST declaration on every tax invoice in every bid: the word, beside invoice amounts,
+    # reporting nobody's turnover. Read as evidence it invents a figure on a real page.
+    ("turnover", "of sale covered by this tax invoice has been effected by me /us and it shall be "
+                 "accounted for in the turnover of sales while filing of return and the due tax", None),
+    ("turnover", "s and it shall be accounted for in A/c Holder's Name : OM ENGINEERS the turnover "
+                 "of supplies while filling of return and the due tax, Bank Name : Cosmos Bank", None),
+
+    # --- net worth: stated once, derivable otherwise ---
+    ("net_worth", "2 Net-Worth 255 293 332", "anchor"),
+    ("net_worth", "I. EQUITY AND LIABILITIES (1) Shareholders Fund (a) Share Capital 3", "support"),
+    ("net_worth", "Reserves and Surplus 2,41,33,019", "support"),
+    # The auditor describing the method is not the bidder's figure.
+    ("net_worth", "I. Verification of Net-worth: Net-worth is determined by subtracting total "
+                  "liabilities from total assets", None),
+
+    # --- people: the requirement counts them, the bid names them ---
+    ("staff_strength", "Undertaking for number of technically qualified professionals on companies' payroll", "anchor"),
+    ("staff_strength", "I hereby declare that our organization has 50+ technically qualified "
+                       "professionals having core expertise in Software development", "anchor"),
+    ("staff_strength", "STATEMENT NO -IV Details of Technical Personnel Available with Contractor", "anchor"),
+    ("staff_strength", "Technical Staff Certificate This is to certify that the following technical "
+                       "staff is currently working with company / organization", "anchor"),
+    ("staff_strength", "Sr. No. Employee Name Educational Qualification Total Experience in Years", "support"),
+    # A works contract's deployment clause names the same cadres and promises the future.
+    ("staff_strength", "The contractor shall deploy one graduate engineer at site during the "
+                       "execution of the work", None),
+    ("staff_strength", "A qualified site engineer will be appointed before commencement", None),
+
+    # --- a portal heading and an RFP clause are not the bidder's declaration ---
+    ("non_blacklisting", "BID MANAGEMENT User Management Debarred/Revoked Details Bank Response", None),
+    ("non_blacklisting", "We hereby declare that our firm has not been blacklisted or debarred by "
+                         "any Government entity", "anchor"),
+    ("quality_certification", "the requirement of: ISO 9001:2015 Quality Management System", "anchor"),
+]
+
+
+@pytest.mark.parametrize("key,text,want", BIDDER_PHRASINGS)
+def test_how_a_bid_states_each_fact(key, text, want):
+    from app.services.concepts import BY_KEY
+
+    assert BY_KEY[key].hit(text) == want
+
+
+# A bid opens with a checklist of its own contents and the tender closes with the same list. Those
+# rows name every concept exactly, next to numbers that are page ranges. One of them read as
+# evidence produced a net worth of ₹2,022 for a company certifying ₹3.32 crore.
+CHECKLIST_ROWS = [
+    ("net_worth", "Copy of the audited total turnover, net-worth and Profit & Loss for financial "
+                  "years 2022-23, 2023-24 and 2024-25 as per format mentioned in Section 8.5"),
+    ("net_worth", "14. Net Worth Certificate 49-49"),
+    ("turnover", "9 Turn Over and Net Worth Certificate Y Page No.12-15"),
+    ("turnover", "13. Turnover Certificate 48-48"),
+    ("staff_strength", "16 Manpower Declaration Y Page No.75-77"),
+    ("turnover", "Sr. No. Checklist Items Compliance(Yes/No) Page No. and Section No. in bid"),
+]
+
+
+@pytest.mark.parametrize("key,row", CHECKLIST_ROWS)
+def test_a_checklist_is_never_evidence(key, row):
+    """A checklist says where a document is, never what it says."""
+    from app.services.concepts import BY_KEY
+
+    assert BY_KEY[key].hit(row) is None
+
+
+# ==============================================================================================
+# 11. Grids nobody ruled
+#
+# A chartered accountant aligns figures with spaces. pdfplumber reports no table, so every reader
+# above it sees nothing on exactly the pages that carry the turnover, net worth and profit series.
+# ==============================================================================================
+
+ANNEXURE_A = [
+    "(Annexure·A)",
+    "A statement showing the Turnover Net-worth and Net Profit of Stark Digital Media Services",
+    "Private Limited during preceding three years given below: -",
+    "No. FY 2022-23 FY 2023-24 FY 2024-25",
+    "Details",
+    "Amt (Rs. in lakhs) Amt (Rs. in lakhs) Amt (Rs. in lakhs)",
+    "1 Turnover 407 417 453",
+    "2 Net-Worth 255 293 332",
+    "3 Net Profit 41 38 39",
+    "For BS and Co LLP",
+]
+
+UNRULED_SERIES = [
+    ("turnover", 4_07_00_000.0, 4_53_00_000.0),
+    ("net_worth", 2_55_00_000.0, 3_32_00_000.0),
+    ("net_profit", 41_00_000.0, 39_00_000.0),
+]
+
+
+@pytest.mark.parametrize("row,first,last", UNRULED_SERIES)
+def test_an_unruled_grid_is_read_with_the_unit_its_heading_states(row, first, last):
+    """The unit sits in a second header row, under the years and above the figures. Read without
+    it a turnover of ₹4.07 crore is reported as ₹407 and the bidder fails on a unit."""
+    from app.services.year_tables import (
+        NETWORTH_LABEL, PROFIT_LABEL, TURNOVER_LABEL, DERIVED_LABEL,
+        grid_from_lines, read_year_series,
+    )
+
+    labels = {"turnover": TURNOVER_LABEL, "net_worth": NETWORTH_LABEL, "net_profit": PROFIT_LABEL}
+    series = read_year_series(grid_from_lines(ANNEXURE_A), want=labels[row], avoid=DERIVED_LABEL)
+    assert [s.year for s in series] == [2022, 2023, 2024]
+    assert series[0].value == first and series[-1].value == last
+
+
+def test_the_average_of_an_unruled_series_decides_the_criterion():
+    """₹4.0 Cr required, three years of ₹4.07/4.17/4.53 Cr stated in lakhs on an unruled grid."""
+    from app.services.year_tables import TURNOVER_LABEL, DERIVED_LABEL, grid_from_lines, read_year_series
+
+    series = read_year_series(grid_from_lines(ANNEXURE_A), want=TURNOVER_LABEL, avoid=DERIVED_LABEL)
+    assert sum(s.value for s in series) / len(series) >= 4_00_00_000
+
+
+def test_a_serial_column_is_not_a_row_label():
+    """"1 | Turnover | 407" labelled every row "1", and a filter for turnover matched nothing."""
+    from app.services.year_tables import _label_of
+
+    assert _label_of(["1", "Turnover", "407", "417", "453"]) == "Turnover"
+    assert _label_of(["2", "Net-Worth", "255", "293", "332"]) == "Net-Worth"
+
+
+def test_a_full_rupee_grid_is_not_rescaled():
+    """A stray "lakh" anywhere on the page must not multiply figures already in rupees."""
+    from app.services.year_tables import TURNOVER_LABEL, read_year_series
+
+    grid = [[["Financial Year", "Turnover (Rs) in lakhs"],
+             ["2020-2021", "3,43,19,907/-"], ["2021-2022", "2,81,82,821/-"]]]
+    assert [s.value for s in read_year_series(grid, want=TURNOVER_LABEL)] == [3_43_19_907.0, 2_81_82_821.0]
+
+
+# ==============================================================================================
+# 12. A table of data is not a damaged page
+#
+# A roster carries no function words, so the common-word test calls it garbled; its text layer is
+# then discarded and the page billed to OCR. Two of the three pages this recovers in the corpus are
+# the staff rosters the IT-professionals count is read from.
+# ==============================================================================================
+
+PAGE_KINDS = [
+    ("roster", "english",
+     "15 Mohit Pandey BE 3.7\n16 Rushikesh Bairagi BE 3.5\n17 Sayali Bhosale Diploma in IT 3.5\n"
+     "18 suryakanta Sahu BCA 3.5\n19 Hariom Gawande bachelor of Mass communication 3.4\n"
+     "20 Lokesh Patil BE 3.3\n21 Pratik Patil MBA 4\n22 Dhiraj Pawar BE 3.2\n23 Manan Jain BCA 3.1"),
+    ("prose", "english",
+     "The contractor shall submit the certificate of completion for the work along with the final "
+     "bill, and all measurements shall be recorded in the measurement book as per this tender."),
+    ("shifted encoding", "garbled",
+     ";?G;8@GCO b>JB?;I>E;(=BE(;BH>(B=;9<E(B:(J>?(zjw(p?>C>dBE;(=CBG:>:r(9@(BEA(D?<EF(9E@<?"),
+    ("letter-spaced scan", "garbled",
+     "W O R K C O M PL E T I O N CERTI F I CA TE Ac c ept ed t en der Am oun t 2t7.t2 f or t he w or k"),
+]
+
+
+@pytest.mark.parametrize("name,want,text", PAGE_KINDS)
+def test_a_page_of_data_is_still_readable(name, want, text):
+    from app.adapters.readability import classify_page
+
+    assert classify_page(text).kind == want, name
+
+
+# ==============================================================================================
+# 13. Counting people a requirement asks for and a roster proves
+#
+# "An on-roll staff strength of a minimum of 30 IT Professionals" is answered by a declaration of
+# "50+ technically qualified professionals on companies' payroll" and a roster numbered to 67 over
+# three pages. Both are returned: the declaration is what the bidder asserts, the roster is the
+# only one of the two that can be counted.
+# ==============================================================================================
+
+def _page(number, lines, tables=()):
+    from app.adapters.pdf_parser import ParsedPage
+    from app.adapters.readability import PageQuality
+
+    return ParsedPage(number=number, text="\n".join(lines), lines=list(lines),
+                      tables=[list(t) for t in tables], quality=PageQuality("english"))
+
+
+def _roster_doc():
+    """The DBT bid's shape: a contents page that numbers its own rows, then the roster on 75-77."""
+    from app.adapters.pdf_parser import ParsedDocument, Sentence
+
+    index = [f"{i} Annexure item {i} BE Y Page No.{i}-{i}" for i in range(1, 17)]
+    intro = ["Undertaking for number of technically qualified professionals on companies' payroll",
+             "I hereby declare that our organization has 50+ technically qualified professionals "
+             "having core expertise in Software development as on 02/02/2026"]
+    names = ["Aashwini Bankar MCA", "Vishal Yewle BE Electrical", "Kartik Shete BCA",
+             "Neelamala Bengle BSC", "Vijay Ishware BCA", "Ranjit Mohol B.Com"]
+    body = {75: range(1, 15), 76: range(15, 48), 77: range(48, 68)}
+    pages = [_page(1, index)] + [_page(n, ([] if n != 75 else intro) +
+                                       [f"{i} {names[i % len(names)]} {3 + i % 7}" for i in rng])
+                                 for n, rng in body.items()]
+    pages = [pages[0]] + [p for p in pages[1:]]
+    sentences = [Sentence(page=75, text=intro[0], section="Undertaking"),
+                 Sentence(page=75, text=intro[1], section="Undertaking")]
+    # Pages 2-74 are absent from this fixture; the finder addresses pages by number, not position.
+    filler = [_page(n, []) for n in range(2, 75)]
+    return ParsedDocument(pages=[pages[0]] + filler + pages[1:], sentences=sentences)
+
+
+STAFF_SPEC_REQ = ("The Bidder must have an on-roll staff strength of a minimum of 30 IT "
+                  "Professionals having Core Expertise in Software Development.")
+
+
+def test_both_routes_to_a_head_count_are_returned():
+    from app.services.bidder_extraction import CriterionSpec, find_staff_strength
+
+    spec = CriterionSpec(key="min_staff_strength", label="Minimum IT Staff on Payroll", operator=">=",
+                         params={}, threshold_value=30, threshold_unit="people",
+                         requirement=STAFF_SPEC_REQ)
+    by_source = {c.detail.get("source"): c for c in find_staff_strength(_roster_doc(), spec)}
+    assert by_source["declared"].value_numeric == 50
+    assert by_source["roster"].value_numeric == 67
+
+
+def test_the_contents_page_does_not_steal_the_rosters_low_numbers():
+    """A single dict keyed by serial is first-come-first-served, and the index page — scanned
+    first, numbering its own rows 1, 2, 3 — took them. The roster then looked as though it began
+    at 5 and was discarded, losing a 67-name roster entirely."""
+    from app.services.bidder_extraction import CriterionSpec, find_staff_strength
+
+    spec = CriterionSpec(key="min_staff_strength", label="Staff", operator=">=", params={},
+                         threshold_value=30, threshold_unit="people", requirement=STAFF_SPEC_REQ)
+    roster = next(c for c in find_staff_strength(_roster_doc(), spec)
+                  if c.detail.get("source") == "roster")
+    assert roster.detail["first_page"] == 75 and roster.detail["last_page"] == 77
+    assert roster.page == 75, "cited the contents page instead of the roster"
+
+
+def test_a_requirement_echoed_back_is_not_the_bidders_own_count():
+    """Bids reproduce the RFP clause. Reading its number as the claim hands every bidder exactly
+    the threshold — a pass on the tender's own words."""
+    from app.adapters.pdf_parser import ParsedDocument, Sentence
+    from app.services.bidder_extraction import CriterionSpec, find_staff_strength
+
+    echo = ("We confirm that we have read the requirement for an on-roll staff strength of a "
+            "minimum of 30 IT Professionals having core expertise in Software Development.")
+    doc = ParsedDocument(pages=[_page(1, [echo])], sentences=[Sentence(page=1, text=echo, section="")])
+    spec = CriterionSpec(key="min_staff_strength", label="Staff", operator=">=", params={},
+                         threshold_value=30, threshold_unit="people", requirement=STAFF_SPEC_REQ)
+    assert find_staff_strength(doc, spec) == []
+
+
+def test_a_bill_of_quantities_row_is_not_a_person():
+    """A BOQ line has a roster's exact shape: serial, description, number."""
+    from app.adapters.pdf_parser import ParsedDocument, Sentence
+    from app.services.bidder_extraction import CriterionSpec, find_staff_strength
+
+    boq = ["1 Excavation in ordinary soil 2500", "2 Providing and laying PCC 1:4:8 1800",
+           "3 Supplying and fixing MS grating 940"]
+    doc = ParsedDocument(
+        pages=[_page(1, ["Details of Technical Personnel"] + boq)],
+        sentences=[Sentence(page=1, text="Details of Technical Personnel", section="")])
+    spec = CriterionSpec(key="min_staff_strength", label="Staff", operator=">=", params={},
+                         threshold_value=3, threshold_unit="people", requirement=STAFF_SPEC_REQ)
+    assert not [c for c in find_staff_strength(doc, spec) if c.detail.get("source") == "roster"]

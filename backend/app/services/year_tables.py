@@ -92,12 +92,52 @@ def cell_year(text: str) -> int | None:
     return fy_start(m.group("y1"), m.group("y2")) if m else None
 
 
+def _table_unit(rows: list[list[str]], head_idx: int) -> float:
+    """The unit a grid states anywhere above its figures.
+
+    `unit_of` reads one label. A CA's statement puts the unit in a second header row, under the
+    years and above the data, where neither the row label nor the year header can see it:
+
+        No. | Details    | FY 2022-23         | FY 2023-24         | FY 2024-25
+            |            | Amt (Rs. in lakhs) | Amt (Rs. in lakhs) | Amt (Rs. in lakhs)
+         1  | Turnover   | 407                | 417                | 453
+         2  | Net-Worth  | 255                | 293                | 332
+
+    Read without it, a turnover of ₹4.07 crore is reported as ₹407 and the bidder fails a ₹4 crore
+    requirement on a unit. Only rows that state no figure of their own are consulted, so a data row
+    that happens to mention "lakh" cannot re-scale its own neighbours.
+    """
+    for row in rows[: head_idx + 1] + [r for r in rows[head_idx + 1:]
+                                       if not any(cell_amount(c) is not None for c in r)
+                                       and not any(cell_year(c) is not None for c in r)]:
+        unit = unit_of(" ".join(c or "" for c in row))
+        if unit > 1:
+            return unit
+    return 1.0
+
+
+_WORDY = re.compile(r"[A-Za-z\u0900-\u097F]{2}")
+
+
 def _label_of(row: list[str]) -> str | None:
+    """What the row is called. A numbered grid puts a serial in the first column —
+
+        1 | Turnover  | 407 | 417 | 453
+        2 | Net-Worth | 255 | 293 | 332
+
+    and taking the first non-numeric cell labels both rows "1" and "2", so a filter looking for
+    turnover finds neither. A label has to say something, so a cell needs two letters to be one;
+    the old behaviour stays as the fallback for a grid whose labels are genuinely symbols."""
+    plain = None
     for c in row:
         c = (c or "").strip()
-        if c and cell_amount(c) is None and cell_year(c) is None:
+        if not c or cell_amount(c) is not None or cell_year(c) is not None:
+            continue
+        if _WORDY.search(c):
             return c
-    return None
+        if plain is None:
+            plain = c
+    return plain
 
 
 def read_year_series(tables: list[list[list[str]]], want: re.Pattern | None = None,
@@ -137,7 +177,9 @@ def read_year_series(tables: list[list[list[str]]], want: re.Pattern | None = No
             if len(years) == 1 and not amounts:
                 # A figure in lakhs is too small to be money on its own; its heading says what it is.
                 for i, c in enumerate(cells):
-                    unit = unit_of(head[i] if i < len(head) else "")
+                    unit = unit_of(head[i] if i < len(head) else "") or 1.0
+                    if unit == 1.0:
+                        unit = _table_unit(rows, 0)
                     if unit > 1 and i != years[0][0] and cell_amount(c, unit) is not None:
                         amounts = [(i, cell_amount(c, unit))]
                         break
@@ -163,7 +205,7 @@ def read_year_series(tables: list[list[list[str]]], want: re.Pattern | None = No
             label = _label_of(row)
             if not keep(label):
                 continue
-            unit = unit_of(label) if unit_of(label) > 1 else unit_of(" ".join(rows[head_idx]))
+            unit = unit_of(label) if unit_of(label) > 1 else _table_unit(rows, head_idx)
             for i, year in col_year.items():
                 if i >= len(cells):
                     continue
@@ -183,5 +225,121 @@ def read_year_series(tables: list[list[list[str]]], want: re.Pattern | None = No
 
 # Labels for the figure a bidder reported, and for the ones an accountant computed from it.
 TURNOVER_LABEL = re.compile(r"turn\s?over|gross\s+receipt|contract\s+receipt|receipts|revenue|amount\s*\(", re.IGNORECASE)
+NETWORTH_LABEL = re.compile(r"net\s*-?\s*worth|networth|net\s+assets?|owners?\s*'?\s*funds?|shareholders?\s*'?\s*funds?", re.IGNORECASE)
+PROFIT_LABEL = re.compile(r"net\s+profit|profit\s+after\s+tax|\bPAT\b", re.IGNORECASE)
 WORK_DONE_LABEL = re.compile(r"amount\s+of\s+work|work\s+done|value\s+of\s+(?:civil\s+)?work", re.IGNORECASE)
 DERIVED_LABEL = re.compile(r"updat|factor|escalat|multipl|weightage", re.IGNORECASE)
+
+
+# ----------------------------------------------------------------------------------------------
+# Grids that were never ruled
+# ----------------------------------------------------------------------------------------------
+
+# A chartered accountant's certificate aligns its figures with spaces, not borders, so pdfplumber
+# reports no table at all and every reader above this line sees nothing. On the DBT bid's
+# Annexure-A (p.15) `page.tables` is empty while the text layer holds the whole statement:
+#
+#     No. FY 2022-23 FY 2023-24 FY 2024-25
+#     Amt (Rs. in lakhs) Amt (Rs. in lakhs) Amt (Rs. in lakhs)
+#     1 Turnover 407 417 453
+#     2 Net-Worth 255 293 332
+#
+# The alignment is not recoverable — both pdfplumber and the OCR tier collapse runs of spaces to
+# one — so the structure is rebuilt from the token pattern instead: a line naming k financial years
+# declares k columns, and a line ending in k figures fills them. That is also why this works on an
+# OCR'd page, which arrives as lines of text with no coordinates at all.
+_FIGURE = re.compile(r"^(?:rs\.?|inr|₹)?\s*\(?-?\s*(?:\d[\d,]*(?:\.\d+)?|\.\d+)\s*\)?\s*(?:/-|/–|%)?$", re.IGNORECASE)
+_SERIAL_TOKEN = re.compile(r"^\(?\d{1,3}[.)]?$")
+_FY_TOKEN = re.compile(r"^(?:F\.?\s?Y\.?)?\s*(?:19|20)\d{2}\s*[-–—/]\s*(?:(?:19|20)\d{2}|\d{2})$", re.IGNORECASE)
+
+
+def _fy_tokens(line: str) -> list[int]:
+    """The financial years a line names, read off the line as whole tokens."""
+    out = []
+    tokens = line.split()
+    i = 0
+    while i < len(tokens):
+        for width in (3, 2, 1):  # "F. Y. 2022-23", "FY 2022-23", "2022-23"
+            if i + width <= len(tokens):
+                joined = " ".join(tokens[i: i + width])
+                if _FY_TOKEN.match(joined):
+                    year = cell_year(joined)
+                    if year is not None:
+                        out.append(year)
+                    i += width
+                    break
+        else:
+            i += 1
+            continue
+        continue
+    return out
+
+
+def _trailing_figures(line: str, want: int) -> tuple[str, list[str]] | None:
+    """(label, figures) when a line ends in exactly `want` figures, else None."""
+    tokens = line.split()
+    if len(tokens) < want + 1:
+        return None
+    figures = tokens[-want:]
+    if not all(_FIGURE.match(t) for t in figures):
+        return None
+    head = tokens[: -want]
+    if head and _SERIAL_TOKEN.match(head[0]):
+        head = head[1:]  # the Sr. No. column
+    label = " ".join(head).strip(" :|-")
+    return (label, figures) if label else None
+
+
+def grid_from_lines(lines: list[str]) -> list[list[list[str]]]:
+    """Grids rebuilt from whitespace-aligned text lines, in the shape `read_year_series` expects.
+
+    Only emits a grid when the line structure is unambiguous: a header naming two or more financial
+    years, with rows that end in exactly that many figures. A row that does not fit is skipped
+    rather than padded, because a half-aligned row would file a figure under the wrong year.
+    """
+    grids: list[list[list[str]]] = []
+    clean = [re.sub(r"\s+", " ", l).strip() for l in lines]
+
+    # Orientation B: a header of years, then one labelled row per quantity.
+    for i, line in enumerate(clean):
+        years = _fy_tokens(line)
+        if len(years) < 2 or len(set(years)) != len(years):
+            continue
+        header = [""] + [f"{y}-{str(y + 1)[-2:]}" for y in years]
+        body: list[list[str]] = []
+        captions: list[list[str]] = []
+        for follow in clean[i + 1: i + 14]:
+            if not follow or _fy_tokens(follow):
+                break
+            hit = _trailing_figures(follow, len(years))
+            if hit:
+                body.append([hit[0]] + hit[1])
+            elif not body and unit_of(follow) > 1:
+                # "Amt (Rs. in lakhs) Amt (Rs. in lakhs) ..." — the unit row, above the figures.
+                captions.append([follow] + [""] * len(years))
+        if body:
+            grids.append([header] + captions + body)
+
+    # Orientation A: one line per year, "2020-2021 3,43,19,907/-". The heading that says what the
+    # figures are is the nearest line above that states neither a year nor a figure.
+    run: list[list[str]] = []
+    heading = ""
+    for line in clean:
+        years = _fy_tokens(line)
+        hit = _trailing_figures(line, 1) if len(years) == 1 else None
+        if len(years) == 1 and hit is not None and not hit[0]:
+            pass
+        if len(years) == 1:
+            tokens = line.split()
+            figures = [t for t in tokens if _FIGURE.match(t) and not _SERIAL_TOKEN.match(t)]
+            if len(figures) == 1:
+                run.append([f"{years[0]}-{str(years[0] + 1)[-2:]}", figures[0]])
+                continue
+        if len(run) >= 2:
+            grids.append([["Financial Year", heading or "Amount"]] + run)
+        run = []
+        if line and not years and not any(_FIGURE.match(t) for t in line.split()):
+            heading = line
+    if len(run) >= 2:
+        grids.append([["Financial Year", heading or "Amount"]] + run)
+    return grids

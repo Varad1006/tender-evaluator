@@ -146,7 +146,7 @@ def test_emd_rounding_the_tender_reference_and_a_shortfall():
     other = evaluate_criterion(spec, [_claim("pmc_emd", 60000.0, for_this_tender=False, tender_ref="PMC/OTHER/1")], "", date(2026, 5, 4))
     assert other.verdict == "unknown"
     short = evaluate_criterion(spec, [_claim("pmc_emd", 6000.0, for_this_tender=True, payment_status="Success")], "", date(2026, 5, 4))
-    assert short.verdict == "fail"
+    assert short.verdict == "not_matched"
 
 
 def test_registration_is_judged_on_the_bid_date_and_any_valid_one_counts():

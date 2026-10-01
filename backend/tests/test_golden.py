@@ -24,7 +24,7 @@ EXPECTED_CRITERIA = {  # key -> (tender page, clause, threshold display)
 
 # Everything passes except these (bidder, criterion) -> (verdict, unknown_kind)
 EXCEPTIONS = {
-    ("GreenVolt Infra Solutions", "avg_turnover"): ("fail", None),
+    ("GreenVolt Infra Solutions", "avg_turnover"): ("not_matched", None),
     ("Urja Solar Tech Pvt Ltd", "warranty_years"): ("unknown", "conflict"),
     ("Urja Solar Tech Pvt Ltd", "epf_esic_registration"): ("unknown", "not_found"),
 }
@@ -79,7 +79,7 @@ def test_every_decided_verdict_has_dual_citation(evaluated):
     _, data = evaluated
     for v in data["verdicts"]:
         assert v["requirement"]["page"] and v["requirement"]["quote"]
-        if v["verdict"] in ("pass", "fail"):
+        if v["verdict"] in ("pass", "fail", "not_matched"):
             ev = v["evidence"][0]
             assert ev["page"] and ev["quote"] and ev["document_id"] and ev["document_name"]
 

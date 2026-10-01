@@ -177,6 +177,84 @@ upload envelope(s)   one zip = one bidder (several files per bidder allowed; .pd
 5. VERDICTS          evaluation.py — arithmetic in code, one handler per PMC criterion
 ```
 
+## Matching a requirement to a bid that words it differently
+
+A tender states a requirement in its own language and a bid answers in the bidder's. The two rarely
+share a word, and nothing in a submission is labelled with the tender's wording:
+
+| | |
+|---|---|
+| tender (DBT RFP p.15) | "an **on-roll staff strength** of a minimum of 30 **IT Professionals** having Core Expertise in Software Development" |
+| bid (p.75) | "Undertaking for number of **technically qualified professionals on companies' payroll** … our organization has **50+** technically qualified professionals" |
+
+Searching for the requirement's words finds nothing, and the criterion comes back unknown on a
+submission that answers it twice over. `app/services/concepts.py` closes that gap. A requirement is
+resolved to a **concept**, and the concept carries the vocabulary a bid is known to use, in three
+kinds:
+
+* **anchors** name the fact alone — "Net-Worth", "Annual Turnover", "on companies' payroll".
+* **supports** are consistent with it but name other things too — "Revenue from Operations" is the
+  turnover line of a P&L and also appears in notes and schedules. A support needs corroboration.
+* **vetoes** name the fact in text that states no value of it. Every bid carrying a tax invoice
+  carries "it shall be accounted for in the turnover of sales while filing of return"; every bid
+  opens with a contents list naming each certificate beside a page range. Read as evidence, one
+  such row reported a net worth of **₹2,022** for a company certifying ₹3.32 crore — cited to a
+  real page, and enough to disqualify it. A veto outranks any anchor on the same span.
+
+Finders are dispatched **by concept, not by criterion key**: the keys are generated from the clause
+they were read in, so the same requirement arrives as `avg_turnover` on one tender,
+`positive_net_worth` on another and `min_staff_strength` on a third. A registry keyed by name finds
+a finder for none of them on a tender nobody has seen yet.
+
+### Grids nobody ruled
+
+A chartered accountant aligns figures with spaces, so `page.tables` is empty on exactly the pages
+that carry the turnover, net worth and profit series. `year_tables.grid_from_lines` rebuilds the
+structure from the token pattern — a line naming *k* financial years declares *k* columns, and a
+line ending in *k* figures fills them. The same routine works on an OCR'd page, which arrives as
+lines of text with no coordinates at all. The unit is taken from whichever header or caption row
+states it ("Amt (Rs. in lakhs)"), because read without it a turnover of ₹4.07 crore is reported as
+₹407 and the bidder fails a ₹4 crore requirement on a unit.
+
+### Counting people
+
+Three independent routes, all returned as separate claims: a declared count ("50+"), the roster's
+own highest serial, and a tabulated staff statement. The roster is the only one that can be
+counted, so `rows_read` travels with it as a **floor** — a shortfall below a count taken directly
+from the submission is an artefact of the reading, not the bidder.
+
+## The reading stage, and why its output is checked
+
+`llm_verdict.py` is the only billed part of the pipeline besides OCR, and it runs **only where
+deterministic extraction cannot reach a figure** — with ten to fifteen bidders on one tender, that
+is the difference between a run costing cents and one that does not. Everything a model returns is
+treated as a claim about the submission and verified against it:
+
+1. **It may only cite evidence it was given.** A page number is never asked for, so one can never
+   be invented: the page comes from the span the model selected.
+2. **Its quote must be in that span, verbatim.** This is the gate that makes a fabricated figure
+   impossible to cite — there is nowhere for it to come from.
+3. **It never does arithmetic.** It reports the figure as printed ("407") and names the unit the
+   document states ("lakhs"); the multiplication is ours.
+4. **The comparison stays in Python**, which is what lets a result say "deterministic check — no AI
+   in the comparison" truthfully.
+5. **A negative is confirmed twice.** Before `not_matched` is issued on a model's reading, it goes
+   to a stronger model; disagreement yields `unknown`, never a shortfall.
+
+A reply failing any gate is not retried into compliance — the criterion comes back `unknown` with
+the reason recorded, which is the honest answer when the submission could not be read.
+
+### Verdict vocabulary
+
+| verdict | meaning |
+|---|---|
+| `pass` | the figure was read and meets the requirement |
+| `not_matched` | the figure was read and falls short — *"they do not meet this"* |
+| `unknown` | not found, unreadable, contradictory, or an unconfident reading — *"we could not tell"* |
+| `fail` | a rule broken outright |
+
+`not_matched` and `fail` both disqualify; they differ in what the committee is being told.
+
 ## Verdict rules for PMC works criteria
 
 | criterion | rule |

@@ -3,8 +3,10 @@
 Rules carried over from the bidder-side tool:
   * Deterministic first: every arithmetic, date or presence check is plain code. The LLM is only
     consulted for the qualitative half of a `llm_judge` criterion ("is this project similar?").
-  * unknown != fail: no evidence -> `unknown` (not_found); contradictory evidence -> `unknown`
-    (conflict) with *both* citations kept; an unconfident judgement -> `unknown` (low_confidence).
+  * unknown != not_matched: no evidence -> `unknown` (not_found); contradictory evidence ->
+    `unknown` (conflict) with *both* citations kept; an unconfident judgement -> `unknown`
+    (low_confidence). A figure that was read and falls short is `not_matched` — the committee is
+    told "they do not meet this", which is a different finding from "we could not tell".
   * Every criterion is evaluated for every bidder, even after a gating failure.
 """
 
@@ -26,7 +28,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class VerdictResult:
     criteria_key: str
-    verdict: str  # pass | fail | unknown
+    verdict: str  # pass | not_matched | fail | unknown
     tier: str  # deterministic | ai_assisted | rule_based
     reason: str
     evidence: list[Claim]
@@ -128,7 +130,7 @@ def _numeric(spec: CriterionSpec, claims: list[Claim], reference_year: int | Non
             return _cannot_fail(spec, usable, best.value, unreadable)
         detail = best.explain() if best.applied else _fmt(spec, best.value)
         return VerdictResult(
-            spec.key, "pass" if ok else "fail", "deterministic", evidence=[best_claim],
+            spec.key, "pass" if ok else "not_matched", "deterministic", evidence=[best_claim],
             computation=f"{_fmt(spec, best.value)} {'≥' if ok else '<'} {_fmt(spec, threshold)}",
             reason=f"Best of {len(usable)} year(s) stated: {detail}, against a requirement of ≥ {_fmt(spec, threshold)}."
                    + (" The tender's multiplying factors were applied first." if best.applied else ""),
@@ -154,7 +156,7 @@ def _numeric(spec: CriterionSpec, claims: list[Claim], reference_year: int | Non
     symbol = ("≥" if ok else "<") if spec.operator == ">=" else ("≤" if ok else ">")
     computation = f"{_fmt(spec, value)} {symbol} {_fmt(spec, threshold)}"
     return VerdictResult(
-        spec.key, "pass" if ok else "fail", "deterministic", evidence=usable[:1] if len(usable) > 1 else usable,
+        spec.key, "pass" if ok else "not_matched", "deterministic", evidence=usable[:1] if len(usable) > 1 else usable,
         computation=computation,
         reason=f"Stated {_fmt(spec, value)} against a requirement of {'≥' if spec.operator == '>=' else '≤'} {_fmt(spec, threshold)}.",
     )
@@ -264,7 +266,7 @@ def _similar_project(spec: CriterionSpec, claims: list[Claim], requirement_quote
         why.append(f"completed {c.detail.get('year')}, before the {window}-year window ({earliest} onwards)")
     if value_ok and date_ok and nature == "not_similar":
         why.append(f"nature of work is not similar — {rationale}")
-    return VerdictResult(spec.key, "fail", tier if nature != "n/a" else "deterministic", evidence=[c],
+    return VerdictResult(spec.key, "not_matched", tier if nature != "n/a" else "deterministic", evidence=[c],
                          reason="No qualifying project: " + "; ".join(why) + ".")
 
 
@@ -403,6 +405,12 @@ def evaluate_criterion(spec: CriterionSpec, claims: list[Claim], requirement_quo
         handler = _BY_KEY.get(spec.key)
         if handler is not None:
             return handler(spec, claims, reference)
+        # A criterion whose fact the bid states in its own vocabulary is read before the generic
+        # numeric path, which can only compare figures that already carry the tender's wording.
+        if spec.operator == ">=":
+            concept_verdict = _concept_verdict(spec, claims, requirement_quote, llm)
+            if concept_verdict is not None:
+                return concept_verdict
         if spec.operator in (">=", "<="):
             return _numeric(spec, claims, reference.year)
         if spec.operator == "exists":
@@ -424,8 +432,12 @@ def evaluate_criterion(spec: CriterionSpec, claims: list[Claim], requirement_quo
 
 def overall_status(verdicts: list[tuple[str, bool]]) -> str:
     """verdicts: (verdict, gating). Disqualified on any gating fail; pending on any gating unknown.
-    A non-gating condition (rate analysis, bid validity) informs the committee but decides nothing."""
-    if any(v == "fail" and gating for v, gating in verdicts):
+    A non-gating condition (rate analysis, bid validity) informs the committee but decides nothing.
+
+    `not_matched` disqualifies exactly as `fail` does — the two differ in what they tell the
+    committee, not in their effect: a rule broken outright versus a figure read and found short.
+    """
+    if any(v in ("fail", "not_matched") and gating for v, gating in verdicts):
         return "disqualified"
     if any(v == "unknown" and gating for v, gating in verdicts):
         return "pending"
@@ -471,7 +483,7 @@ def _emd(spec: CriterionSpec, claims: list[Claim], reference: date) -> VerdictRe
                              reason=f"EMD of {format_inr(best.value_numeric)} paid for this tender (tender amount not read).")
     ok = best.value_numeric >= required - 1.0
     return VerdictResult(
-        spec.key, "pass" if ok else "fail", "deterministic", evidence=[best],
+        spec.key, "pass" if ok else "not_matched", "deterministic", evidence=[best],
         computation=f"{format_inr(best.value_numeric)} {'≥' if ok else '<'} {format_inr(required)}"
                     + (" (within ₹1 of rounding)" if ok and best.value_numeric < required else ""),
         reason=(f"EMD of {format_inr(best.value_numeric)} paid online for this tender"
@@ -554,7 +566,7 @@ def _bid_capacity(spec: CriterionSpec, claims: list[Claim], reference: date) -> 
             ok = rec >= required
             how = (f"(A {format_inr_short(c.detail['A'])} × N {n:g} × 1.5) − B {format_inr_short(c.detail.get('B') or 0)}")
             return VerdictResult(
-                spec.key, "pass" if ok else "fail", "deterministic", evidence=[c],
+                spec.key, "pass" if ok else "not_matched", "deterministic", evidence=[c],
                 computation=f"{how} = {format_inr(rec)} {'≥' if ok else '<'} {format_inr(required)}",
                 reason=("Recomputed on this tender's terms from the certificate's own A and B"
                         + (f" — the certificate {'; '.join(defects)}" if defects else "")
@@ -564,7 +576,7 @@ def _bid_capacity(spec: CriterionSpec, claims: list[Claim], reference: date) -> 
             )
         if not defects and not restricted and c.value_numeric is not None:
             ok = c.value_numeric >= required
-            return VerdictResult(spec.key, "pass" if ok else "fail", "deterministic", evidence=[c],
+            return VerdictResult(spec.key, "pass" if ok else "not_matched", "deterministic", evidence=[c],
                                  computation=f"{format_inr(c.value_numeric)} {'≥' if ok else '<'} {format_inr(required)}",
                                  reason=f"Certified bid capacity {format_inr(c.value_numeric)} against the required {format_inr(required)}.")
     c = rows[0]
@@ -648,3 +660,147 @@ def _key_quantities(spec: CriterionSpec, claims: list[Claim], reference: date) -
 
 _BY_KEY = {"pmc_emd": _emd, "emd": _emd, "pmc_registration": _registration, "pmc_bid_capacity": _bid_capacity,
            "no_joint_venture": _sole_bidder, "pmc_key_quantities": _key_quantities}
+
+
+# --------------------------------------------------------------------------------------------
+# Concept criteria: the fact is in the bid under the bidder's own name for it
+# --------------------------------------------------------------------------------------------
+
+def _not_matched(spec: CriterionSpec, value: float, basis: str, evidence: list[Claim],
+                 tier: str, reason: str, computation: str) -> VerdictResult:
+    """Evidence was found, read, and falls short.
+
+    Distinct from `fail`, which is reserved for a rule broken outright, and from `unknown`, which
+    means the submission could not be read. A committee needs the three apart: "they do not meet
+    this" is a different conversation from "we could not tell".
+    """
+    return VerdictResult(spec.key, "not_matched", tier, reason=reason, evidence=evidence,
+                         computation=computation, extra={"basis": basis, "value": value})
+
+
+def _deterministic_measure(spec: CriterionSpec, claims: list[Claim], how: str):
+    """The same aggregation as the reading stage, over figures the finders read on their own.
+
+    This is the whole check when no reading stage is configured, and the floor under it when there
+    is: a concept criterion still gets a verdict with the API switched off.
+    """
+    from app.services.llm_verdict import Reading, measure
+
+    readings = [
+        Reading(value=c.value_numeric, raw_figure=c.value, unit="", quote=c.quote, page=c.page,
+                year=c.detail.get("year"), confidence=1.0, reasoning="", model="deterministic", claim=c)
+        for c in claims if c.value_numeric is not None
+    ]
+    return measure(readings, how)
+
+
+def _concept_verdict(spec: CriterionSpec, claims: list[Claim], requirement_quote: str, llm) -> VerdictResult | None:
+    """Pass / not matched / unknown for a criterion whose fact has a concept, or None if it has not.
+
+    The reading stage chooses which figure answers the requirement; the comparison below is plain
+    arithmetic on the number it returned, and a shortfall is put back to a stronger model before it
+    is shown as one.
+    """
+    from app.services import concepts as concept_registry
+    from app.services import llm_verdict
+
+    concept = concept_registry.resolve(requirement_quote, label=spec.label,
+                                       datatype="count" if spec.threshold_unit not in (None, "INR") else "currency")
+    if concept is None or spec.threshold_value is None:
+        return None
+
+    how = llm_verdict.aggregation(spec, requirement_quote)
+    threshold = spec.threshold_value
+    unreadable = _incomplete(claims)
+
+    # Deterministic first, always. When the finders already read a figure, the reading stage would
+    # add cost and a hallucination surface to a question that is answered — and with ten to fifteen
+    # bidders on one tender that is the difference between a run that costs cents and one that does
+    # not. The model is for the figures deterministic reading cannot reach.
+    value, basis, rest = _deterministic_measure(spec, claims, how)
+    tier, model, from_model = "deterministic", "deterministic", False
+    read_note = "Figures located deterministically; the comparison is arithmetic."
+    outcome = None
+
+    if value is None and llm is not None:
+        outcome = llm_verdict.read(spec, concept, claims, requirement_quote, llm)
+        if outcome.ok:
+            value, basis, rest = llm_verdict.measure(outcome.readings, how)
+            tier, model, from_model = "ai_assisted", outcome.model, True
+            cited = rest[0].page if rest else (claims[0].page if claims else "?")
+            read_note = (f"The submission states this in its own words, so it was read by {model} "
+                         f"and the quote verified against page {cited}; the comparison is arithmetic.")
+        elif outcome.refusals:
+            return VerdictResult(
+                spec.key, "unknown", "deterministic", unknown_kind="low_confidence", evidence=claims[:3],
+                reason="Evidence was located but could not be read reliably: "
+                       + "; ".join(outcome.refusals[:2]) + ". Treated as unknown, not as a shortfall.")
+    evidence = [r.claim for r in rest if r.claim is not None] or claims[:2]
+
+    if value is None:
+        return _not_found(spec, concept.label.lower())
+
+    shown = _fmt(spec, value)
+    computation = f"{shown} {'≥' if value >= threshold else '<'} {_fmt(spec, threshold)}"
+    if basis:
+        computation += f" · {basis}"
+
+    if value >= threshold:
+        return VerdictResult(spec.key, "pass", tier, evidence=evidence, computation=computation,
+                             reason=f"{concept.label} of {shown} meets the required "
+                                    f"{_fmt(spec, threshold)}. {read_note}",
+                             extra={"basis": basis, "value": value, "model": model})
+
+    # A shortfall measured over a series with figures missing from it is not a shortfall.
+    if unreadable:
+        return _cannot_fail(spec, claims, value, unreadable)
+
+    # A count read from a roster has a floor: the rows actually counted. If the floor already
+    # clears the requirement the shortfall is an artefact of the reading, not the bidder.
+    floors = [c.detail.get("floor") for c in claims if c.detail.get("floor")]
+    if floors and max(floors) >= threshold:
+        best = max(floors)
+        return VerdictResult(spec.key, "pass", "deterministic", evidence=claims[:2],
+                             computation=f"{best:g} ≥ {threshold:g} · rows counted",
+                             reason=f"{concept.label} of at least {best:g} counted directly from the "
+                                    f"submission, meeting the required {threshold:g}.")
+
+    confirmed, why = ((None, "") if not from_model else
+                      _confirm_shortfall(spec, concept, claims, requirement_quote, how, threshold, llm))
+    if confirmed is False:
+        return VerdictResult(spec.key, "unknown", "ai_assisted", unknown_kind="conflict",
+                             evidence=evidence, reason=why)
+    return _not_matched(spec, value, basis, evidence, tier,
+                        reason=f"Not matched — {concept.label.lower()} of {shown} is below the required "
+                               f"{_fmt(spec, threshold)}. {why or read_note}",
+                        computation=computation)
+
+
+def _confirm_shortfall(spec: CriterionSpec, concept, claims: list[Claim], requirement_quote: str,
+                       how: str, threshold: float, llm) -> tuple[bool | None, str]:
+    """Put a shortfall to a second, stronger model. (True, why) only if it agrees it falls short.
+
+    Returns (None, note) when no second opinion was available, which lets the shortfall stand on
+    the first reading — the alternative, calling everything unknown whenever the escalation model
+    is unreachable, would make the system useless offline. Returns (False, why) when the second
+    model reads a qualifying figure the first one missed, and the criterion becomes a conflict.
+    """
+    from app.services import llm_verdict
+
+    if llm is None:
+        return None, ""
+    try:
+        second = llm_verdict.read(spec, concept, claims, requirement_quote, llm, role="critical")
+    except Exception as exc:  # the escalation is a safety net; its failure must not decide anything
+        log.warning("Shortfall confirmation unavailable for %s: %s", spec.key, exc)
+        return None, ""
+    if not second.ok:
+        return None, ""
+    value, basis, _ = llm_verdict.measure(second.readings, how)
+    if value is None:
+        return None, ""
+    if value >= threshold:
+        return False, (f"Two readings disagree: one puts {concept.label.lower()} below the required "
+                       f"{_fmt(spec, threshold)}, the other at {_fmt(spec, value)} ({basis}), which meets it. "
+                       "Shown as unknown rather than a shortfall, for an evaluator to settle.")
+    return True, f"Confirmed on a second reading by {second.model} at {_fmt(spec, value)}."

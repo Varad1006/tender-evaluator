@@ -46,6 +46,16 @@ MAX_BIDDERS_SOFT_LIMIT = int(os.environ.get("TE_MAX_BIDDERS_SOFT_LIMIT", "20"))
 LLM_EXTRACTION_TIMEOUT_SECS = int(os.environ.get("TE_LLM_EXTRACTION_TIMEOUT_SECS", "45"))
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+# Ceiling for the reading stage in one evaluation run, in US dollars. Reached, it degrades to
+# deterministic reading rather than billing further.
+LLM_MAX_SPEND_USD = float(os.environ.get("TE_LLM_MAX_SPEND_USD", "1.00"))
+# A grounded reading is a short JSON object; the cap is what the reply needs, not what the model
+# could produce, because the whole window is reserved against the balance on every call.
+LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("TE_LLM_MAX_OUTPUT_TOKENS", "700"))
+# Criterion comparisons run in a pool because the ones that need a reading cost a round-trip,
+# and one tender is evaluated against ten to fifteen bidders at once.
+EVALUATION_CONCURRENCY = int(os.environ.get("TE_EVALUATION_CONCURRENCY", "8"))
 
 # --- OCR tier (Datalab / Chandra) -------------------------------------------------------
 DATALAB_API_KEY = os.environ.get("DATALAB_API_KEY", "")

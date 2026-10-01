@@ -6,6 +6,7 @@ import logging
 import shutil
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 
@@ -261,7 +262,8 @@ def run_jobs(jobs: list[tuple]) -> None:
 def _spec(c: Criterion, tender_ctx: dict | None = None) -> CriterionSpec:
     return CriterionSpec(key=c.key, label=c.label, operator=c.operator, params=c.params or {},
                          threshold_value=c.threshold_value, threshold_unit=c.threshold_unit,
-                         extraction_method=c.extraction_method, tender=tender_ctx or {})
+                         extraction_method=c.extraction_method,
+                         requirement=c.source_quote or "", tender=tender_ctx or {})
 
 
 def bidder_uploads_dir(tender_id: str, bidder_id: str) -> Path:
@@ -477,7 +479,12 @@ def evaluate_tender(session: Session, tender: Tender) -> int:
     ctx = tender_context(tender)
     dates = [b.facts.get("bid_date") for b in tender.bidders if b.facts and b.facts.get("bid_date")]
     fallback_bid_date = max(dates) if dates else None
-    count = 0
+    # One tender is evaluated against ten to fifteen bidders, and a criterion whose fact the bid
+    # states in its own wording costs a network round-trip to read. Serially that is minutes of
+    # waiting; the comparisons themselves are pure functions of (spec, claims), so they are run in
+    # a pool and the rows written afterwards in the original order — SQLite keeps one writer, and
+    # the output of a run does not depend on which thread finished first.
+    jobs: list[tuple] = []
     for bidder in tender.bidders:
         if bidder.status != "ClaimsReady":
             continue
@@ -487,24 +494,37 @@ def evaluate_tender(session: Session, tender: Tender) -> int:
         bidder_ctx = {**ctx, "bid_date": (bidder.facts or {}).get("bid_date") or fallback_bid_date}
         for criterion in tender.criteria:
             claims = [_claim_from_row(r) for r in rows if r.criteria_key == criterion.key]
-            result = evaluate_criterion(_spec(criterion, bidder_ctx), claims, criterion.source_quote or criterion.label,
-                                        reference, llm)
-            primary = result.evidence[0] if result.evidence else None
-            session.add(BidderCriterionVerdict(
-                tender_id=tender.id, bidder_id=bidder.id, criterion_id=criterion.id, criteria_key=criterion.key,
-                verdict=result.verdict, verdict_tier=result.tier, unknown_kind=result.unknown_kind,
-                reason=result.reason, computation=result.computation,
-                requirement_tender_page=criterion.source_page, requirement_quote=criterion.source_quote,
-                requirement_document_id=criterion.source_document_id,
-                evidence_document_id=primary.detail.get("document_id") if primary else None,
-                evidence_page=primary.page if primary else None,
-                evidence_quote=primary.quote if primary else None,
-                evidence_json=[{
-                    "document_id": c.detail.get("document_id"), "page": c.page, "quote": c.quote,
-                    "section": c.section, "value": c.value, "tier": c.tier,
-                } for c in result.evidence],
-            ))
-            count += 1
+            jobs.append((bidder, criterion, _spec(criterion, bidder_ctx), claims))
+
+    def run(job):
+        bidder, criterion, spec, claims = job
+        return evaluate_criterion(spec, claims, criterion.source_quote or criterion.label, reference, llm)
+
+    workers = max(1, min(settings.EVALUATION_CONCURRENCY, len(jobs) or 1))
+    if workers > 1 and len(jobs) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(run, jobs))
+    else:
+        results = [run(job) for job in jobs]
+
+    count = 0
+    for (bidder, criterion, _spec_unused, _claims_unused), result in zip(jobs, results):
+        primary = result.evidence[0] if result.evidence else None
+        session.add(BidderCriterionVerdict(
+            tender_id=tender.id, bidder_id=bidder.id, criterion_id=criterion.id, criteria_key=criterion.key,
+            verdict=result.verdict, verdict_tier=result.tier, unknown_kind=result.unknown_kind,
+            reason=result.reason, computation=result.computation,
+            requirement_tender_page=criterion.source_page, requirement_quote=criterion.source_quote,
+            requirement_document_id=criterion.source_document_id,
+            evidence_document_id=primary.detail.get("document_id") if primary else None,
+            evidence_page=primary.page if primary else None,
+            evidence_quote=primary.quote if primary else None,
+            evidence_json=[{
+                "document_id": c.detail.get("document_id"), "page": c.page, "quote": c.quote,
+                "section": c.section, "value": c.value, "tier": c.tier,
+            } for c in result.evidence],
+        ))
+        count += 1
     session.commit()
     return count
 
@@ -640,13 +660,13 @@ def build_evaluation(session: Session, tender: Tender, include_ranking: bool) ->
         b["overall"] = status
         # A non-gating condition (bid validity, rate analysis) is noted, never counted as an issue.
         noted = {v["id"] for v in mine if v["verdict"] != "pass" and not criteria[v["criterion_id"]].gating}
-        b["counts"] = {k: sum(1 for v in mine if v["verdict"] == k and v["id"] not in noted) for k in ("pass", "fail", "unknown")}
+        b["counts"] = {k: sum(1 for v in mine if v["verdict"] == k and v["id"] not in noted) for k in ("pass", "not_matched", "fail", "unknown")}
         b["counts"]["not_a_gate"] = len(noted)
         issues = [{
             "criterion_id": v["criterion_id"], "criterion_label": criteria[v["criterion_id"]].label,
             "verdict": v["verdict"], "reason": v["reason"], "requirement": v["requirement"], "evidence": v["evidence"],
         } for v in mine if v["verdict"] != "pass" and v["id"] not in noted]
-        issues.sort(key=lambda i: i["verdict"] != "fail")
+        issues.sort(key=lambda i: i["verdict"] not in ("fail", "not_matched"))
         b["issues"] = issues
         standings.append(BidderStanding(bidder_id=b["id"], name=b["name"], status=status, price=b["price"],
                                         price_citation=b["price_citation"], issues=issues))

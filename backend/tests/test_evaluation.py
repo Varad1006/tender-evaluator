@@ -43,7 +43,7 @@ def test_missing_evidence_is_unknown_never_fail(spec):
 
 def test_deterministic_tiers_never_call_llm():
     assert evaluate_criterion(TURNOVER, [claim("avg_turnover", "x", 61_000_000)], "req", llm=ExplodingLLM()).verdict == "pass"
-    assert evaluate_criterion(TURNOVER, [claim("avg_turnover", "x", 38_000_000)], "req", llm=ExplodingLLM()).verdict == "fail"
+    assert evaluate_criterion(TURNOVER, [claim("avg_turnover", "x", 38_000_000)], "req", llm=ExplodingLLM()).verdict == "not_matched"
     r = evaluate_criterion(WARRANTY, [claim("w", "12", 12)], "req", llm=ExplodingLLM())
     assert r.verdict == "pass" and r.tier == "deterministic" and r.computation == "12 years ≥ 10 years"
 
@@ -74,9 +74,9 @@ def test_similar_project_rule_based():
     ref = date(2026, 1, 12)
     assert evaluate_criterion(EXPERIENCE, [project(23_000_000, 2023, ["rooftop", "solar"])], "req", ref).verdict == "pass"
     too_small = evaluate_criterion(EXPERIENCE, [project(6_800_000, 2023, ["rooftop", "solar"])], "req", ref)
-    assert too_small.verdict == "fail" and "below" in too_small.reason
+    assert too_small.verdict == "not_matched" and "below" in too_small.reason
     too_old = evaluate_criterion(EXPERIENCE, [project(23_000_000, 2019, ["rooftop", "solar"])], "req", ref)
-    assert too_old.verdict == "fail" and "window" in too_old.reason
+    assert too_old.verdict == "not_matched" and "window" in too_old.reason
     partial = evaluate_criterion(EXPERIENCE, [project(23_000_000, 2023, ["solar"])], "req", ref)
     assert partial.verdict == "unknown" and partial.unknown_kind == "low_confidence" and partial.tier == "rule_based"
 
@@ -100,4 +100,5 @@ def test_similar_project_llm_judge_only_after_arithmetic_gates():
 def test_overall_status():
     assert overall_status([("pass", True), ("unknown", True)]) == "pending"
     assert overall_status([("fail", True), ("unknown", True)]) == "disqualified"
+    assert overall_status([("not_matched", True), ("pass", True)]) == "disqualified"
     assert overall_status([("fail", False), ("pass", True)]) == "eligible"

@@ -28,10 +28,13 @@ export const tokens = {
   sans: "'IBM Plex Sans', 'Noto Sans Devanagari', system-ui, sans-serif",
 } as const;
 
-export type Verdict = 'pass' | 'fail' | 'unknown';
+/** `not_matched` is a figure that was read and falls short; `fail` is a rule broken outright.
+ *  Both disqualify — they differ in what the committee is being told. */
+export type Verdict = 'pass' | 'not_matched' | 'fail' | 'unknown';
 
 export const verdictStyle: Record<Verdict, { label: string; bg: string; fg: string; border: string; solid: string }> = {
   pass: { label: 'Pass', bg: '#E8F6EC', fg: '#166534', border: '#BFE6C9', solid: '#166534' },
+  not_matched: { label: 'Not matched', bg: '#FDECEC', fg: '#B42318', border: '#F3B7B0', solid: '#B42318' },
   fail: { label: 'Fail', bg: '#FDECEC', fg: '#B42318', border: '#F3B7B0', solid: '#B42318' },
   unknown: { label: 'Unknown', bg: '#FFF6E5', fg: '#92600C', border: '#F5D68A', solid: '#92600C' },
 };
@@ -43,7 +46,9 @@ export const notGateStyle = { label: 'Not a gate', bg: '#F0F2F3', fg: '#4B5563',
  * criterion is neutral, since it cannot hold up or disqualify a bid. */
 export function verdictLook(verdict: Verdict, gating = true) {
   if (gating || verdict === 'pass') return verdictStyle[verdict];
-  return verdict === 'fail' ? { ...notGateStyle, label: 'Not met (not a gate)' } : notGateStyle;
+  return verdict === 'fail' || verdict === 'not_matched'
+    ? { ...notGateStyle, label: 'Not met (not a gate)' }
+    : notGateStyle;
 }
 
 export const bucketStyle: Record<string, { bg: string; fg: string }> = {
@@ -56,13 +61,13 @@ export const bucketStyle: Record<string, { bg: string; fg: string }> = {
 export const standingStyle = {
   eligible: { ...verdictStyle.pass, label: 'Eligible' },
   pending: { ...verdictStyle.unknown, label: 'Pending' },
-  disqualified: { ...verdictStyle.fail, label: 'Disqualified' },
+  disqualified: { ...verdictStyle.not_matched, label: 'Disqualified' },
 } as const;
 
 export const theme = createTheme({
   palette: {
     primary: { main: tokens.green, dark: tokens.greenDark, contrastText: '#fff' },
-    error: { main: verdictStyle.fail.fg },
+    error: { main: verdictStyle.not_matched.fg },
     warning: { main: verdictStyle.unknown.fg },
     success: { main: tokens.green },
     text: { primary: tokens.ink, secondary: tokens.muted },
